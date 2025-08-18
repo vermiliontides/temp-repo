@@ -2,16 +2,13 @@ package rootkit
 
 import (
 	"context"
-	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -90,7 +87,7 @@ func (rm *RootkitMonitor) runManualChecks() {
 
 // checkDevForSuspiciousFiles checks /dev for non-device files.
 func (rm *RootkitMonitor) checkDevForSuspiciousFiles() {
-	files, err := ioutil.ReadDir("/dev")
+	files, err := os.ReadDir("/dev")
 	if err != nil {
 		rm.LogEvent(zerolog.ErrorLevel, "Failed to read /dev directory.").Err(err)
 		return
@@ -98,9 +95,18 @@ func (rm *RootkitMonitor) checkDevForSuspiciousFiles() {
 
 	for _, file := range files {
 		filePath := filepath.Join("/dev", file.Name())
-		// Check if it's a regular file (not a device, directory, etc.)
-		if file.Mode().IsRegular() {
-			rm.LogEvent(zerolog.WarnLevel, "Suspicious regular file found in /dev.").Str("file", filePath)
+		info, err := os.Stat(filePath)
+		if err != nil {
+			continue // Skip files that can't be stat'd
+		}
+
+		// In /dev, we expect device files, directories, and symlinks.
+		// A regular file is highly suspicious.
+		mode := info.Mode()
+		if mode&os.ModeDevice == 0 && mode&os.ModeDir == 0 && mode&os.ModeSymlink == 0 {
+			rm.LogEvent(zerolog.WarnLevel, "Suspicious non-device, non-directory file found in /dev.").
+				Str("file", filePath).
+				Str("mode", mode.String())
 		}
 	}
 }

@@ -5,16 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
-	"io/ioutil"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -56,9 +52,9 @@ var (
 			nil
 	}
 	// Mock os.ReadFile
-	readFile = ioutil.ReadFile
+	// TODO: readFile = os.ReadFile()
 	// Mock os.WriteFile
-	writeFile = ioutil.WriteFile
+	// TODO: writeFile = os.WriteFile()
 	// Mock os.Stat
 	osStat = os.Stat
 	// Mock os.MkdirAll
@@ -77,7 +73,7 @@ func TestCertificateMonitor_Run(t *testing.T) {
 	assert.True(t, ok)
 
 	// Create a temporary directory for baselines
-	testBaselineDir, err := ioutil.TempDir("", "cert_baseline_test")
+	testBaselineDir, err := os.MkdirTemp("", "cert_baseline_test")
 	assert.NoError(t, err)
 	defer os.RemoveAll(testBaselineDir)
 
@@ -157,10 +153,10 @@ func TestCertificateMonitor_Run(t *testing.T) {
 		// Mock functions
 		dialWithDialer = func(network, addr string, config *tls.Config) (*tls.Conn, error) {
 			return &tls.Conn{ConnectionState: tls.ConnectionState{PeerCertificates: []*x509.Certificate{{
-				RawSHA256: []byte{0x03},
-				NotAfter:  time.Now().Add(20 * 24 * time.Hour), // Expires in 20 days
-			}}}},
-			nil
+					RawSHA256: []byte{0x03},
+					NotAfter:  time.Now().Add(20 * 24 * time.Hour), // Expires in 20 days
+				}}}},
+				nil
 		}
 		readFile = func(filename string) ([]byte, error) {
 			return []byte("03"), nil
@@ -214,8 +210,8 @@ func TestCertificateMonitor_Run(t *testing.T) {
 
 	// Restore original functions
 	dialWithDialer = tls.DialWithDialer
-	readFile = ioutil.ReadFile
-	writeFile = ioutil.WriteFile
+	readFile = os.ReadFile
+	writeFile = os.WriteFile
 	osStat = os.Stat
 	osMkdirAll = os.MkdirAll
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/config"
+	"github.com/lucid-vigil/sentinel/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -76,7 +76,7 @@ func (nids *NetworkIDS) Run(ctx context.Context) {
 func isValidInterfaceName(name string) bool {
 	// Interface names typically consist of alphanumeric characters, hyphens, and underscores.
 	// They should not contain spaces or shell metacharacters.
-	return regexp.MustCompile(`^[a-zA-Z0-9_-]+).MatchString(name)
+	return regexp.MustCompile(`^[a-zA-Z0-9_-]+`).MatchString(name)
 }
 
 // sanitizeTcpdumpRule performs basic sanitization on a tcpdump rule string.

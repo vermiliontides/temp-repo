@@ -3,12 +3,11 @@ package process
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
-	
 
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v3/process"
@@ -186,7 +185,7 @@ func (pm *ProcessMonitor) monitorProcessCreation() {
 
 // detectHiddenProcesses detects processes that are in /proc but not shown by ps (gopsutil).
 func (pm *ProcessMonitor) detectHiddenProcesses() {
-	procDirs, err := ioutil.ReadDir("/proc")
+	procDirs, err := os.ReadDir("/proc")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to read /proc directory for hidden process detection.")
 		return
@@ -218,7 +217,7 @@ func (pm *ProcessMonitor) detectHiddenProcesses() {
 			hiddenCount++
 			// Try to get command name from /proc/<pid>/comm
 			commPath := fmt.Sprintf("/proc/%d/comm", pid)
-			comm, readErr := ioutil.ReadFile(commPath)
+			comm, readErr := os.ReadFile(commPath)
 			commStr := "unknown"
 			if readErr == nil {
 				commStr = strings.TrimSpace(string(comm))

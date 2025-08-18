@@ -8,10 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -197,7 +196,7 @@ func (pm *PersistenceMonitor) scanLdPreload() {
 	pm.LogEvent(zerolog.InfoLevel, "Scanning for LD_PRELOAD persistence...")
 
 	ldPreloadPath := "/etc/ld.so.preload"
-	content, err := ioutil.ReadFile(ldPreloadPath)
+	content, err := os.ReadFile(ldPreloadPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			pm.LogEvent(zerolog.InfoLevel, "LD_PRELOAD file does not exist.").Str("file", ldPreloadPath)

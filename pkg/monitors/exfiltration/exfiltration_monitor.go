@@ -4,82 +4,88 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 
-	"github.com/rs/zerolog/log"
-	"github.com/shirou/gopsutil/v3/net"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
+	"github.com/rs/zerolog"
+	psnet "github.com/shirou/gopsutil/v3/net"
 )
 
 // ExfiltrationMonitorConfig holds configuration for the ExfiltrationMonitor.
 type ExfiltrationMonitorConfig struct {
-	UploadThresholdMB   int      `mapstructure:"upload_threshold_mb"`
+	UploadThresholdMB  int      `mapstructure:"upload_threshold_mb"`
 	FileSharingDomains []string `mapstructure:"file_sharing_domains"`
-	RunInterval         int      `mapstructure:"run_interval"`
+	RunInterval        int      `mapstructure:"run_interval"`
 }
 
 // ExfiltrationMonitor implements the scheduler.Monitor interface for exfiltration monitoring.
 type ExfiltrationMonitor struct {
-	Config ExfiltrationMonitorConfig
+	*base.BaseMonitor
+	config      *ExfiltrationMonitorConfig
 	lastTxBytes uint64
 }
 
-// Name returns the name of the monitor.
-func (em *ExfiltrationMonitor) Name() string {
-	return "exfiltration_monitor"
+// NewExfiltrationMonitor creates a new ExfiltrationMonitor.
+func NewExfiltrationMonitor(logger zerolog.Logger) scheduler.Monitor {
+	return &ExfiltrationMonitor{
+		BaseMonitor: base.NewBaseMonitor("exfiltration_monitor", logger),
+		config:      &ExfiltrationMonitorConfig{},
+	}
 }
 
 // Run executes the exfiltration monitoring logic.
 func (em *ExfiltrationMonitor) Run(ctx context.Context) {
-	log.Info().Msg("Running Exfiltration Monitor...")
+	em.LogEvent(zerolog.InfoLevel, "Running Exfiltration Monitor...")
 
 	// Initialize lastTxBytes on first run
 	if em.lastTxBytes == 0 {
-		netIOCounters, err := net.IOCounters(nil)
+		netIOCounters, err := psnet.IOCounters(false)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to get initial network IO counters for exfiltration monitoring.")
+			em.LogEvent(zerolog.ErrorLevel, "Failed to get initial network IO counters.").Err(err)
 			return
 		}
-		for _, counter := range netIOCounters {
-			em.lastTxBytes += counter.BytesSent
+		if len(netIOCounters) > 0 {
+			em.lastTxBytes = netIOCounters[0].BytesSent
 		}
 	}
 
 	em.monitorLargeUploads()
 	em.monitorFileSharingConnections()
 
-	log.Info().Msg("Exfiltration Monitor finished.")
+	em.LogEvent(zerolog.InfoLevel, "Exfiltration Monitor finished.")
 }
 
 // monitorLargeUploads monitors for large data uploads.
 func (em *ExfiltrationMonitor) monitorLargeUploads() {
-	log.Info().Msg("Monitoring for large data uploads...")
+	em.LogEvent(zerolog.InfoLevel, "Monitoring for large data uploads...")
 
-	netIOCounters, err := net.IOCounters(nil)
+	netIOCounters, err := psnet.IOCounters(false)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get network IO counters for large upload monitoring.")
+		em.LogEvent(zerolog.ErrorLevel, "Failed to get network IO counters.").Err(err)
 		return
 	}
 
-	var currentTxBytes uint64
-	for _, counter := range netIOCounters {
-		currentTxBytes += counter.BytesSent
+	if len(netIOCounters) == 0 {
+		em.LogEvent(zerolog.WarnLevel, "No network interfaces found for IO counters.")
+		return
 	}
+	currentTxBytes := netIOCounters[0].BytesSent
 
 	// Calculate transmitted data since last check
+	if currentTxBytes < em.lastTxBytes {
+		// Counter wrap-around, reset baseline
+		em.lastTxBytes = currentTxBytes
+		return
+	}
 	transmittedBytes := currentTxBytes - em.lastTxBytes
 	transmittedMB := transmittedBytes / (1024 * 1024)
 
-	log.Info().Uint64("transmitted_mb", transmittedMB).Msg("Data transmitted since last check.")
+	em.LogEvent(zerolog.InfoLevel, "Data transmitted since last check.").Uint64("transmitted_mb", transmittedMB)
 
-	if transmittedMB > uint64(em.Config.UploadThresholdMB) {
-		log.Warn().
+	if transmittedMB > uint64(em.config.UploadThresholdMB) {
+		em.LogEvent(zerolog.WarnLevel, "Large data upload detected: possible data exfiltration.").
 			Uint64("transmitted_mb", transmittedMB).
-			Int("threshold_mb", em.Config.UploadThresholdMB).
-			Msg("Large data upload detected: possible data exfiltration.")
+			Int("threshold_mb", em.config.UploadThresholdMB)
 	}
 
 	em.lastTxBytes = currentTxBytes // Update for next iteration
@@ -87,29 +93,42 @@ func (em *ExfiltrationMonitor) monitorLargeUploads() {
 
 // monitorFileSharingConnections monitors for connections to known file sharing services.
 func (em *ExfiltrationMonitor) monitorFileSharingConnections() {
-	log.Info().Msg("Checking active connections for file sharing services...")
+	em.LogEvent(zerolog.InfoLevel, "Checking active connections for file sharing services...")
 
-	connections, err := net.Connections("inet")
+	connections, err := psnet.Connections("inet")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get network connections for file sharing monitoring.")
+		em.LogEvent(zerolog.ErrorLevel, "Failed to get network connections.").Err(err)
 		return
 	}
 
-	for _, domain := range em.Config.FileSharingDomains {
+	// Pre-resolve all domains for efficiency
+	resolvedDomains := make(map[string][]net.IP)
+	for _, domain := range em.config.FileSharingDomains {
 		ips, err := net.LookupIP(domain)
 		if err != nil {
-			log.Warn().Err(err).Str("domain", domain).Msg("Failed to resolve file sharing domain.")
+			em.LogEvent(zerolog.WarnLevel, "Failed to resolve file sharing domain.").Err(err).Str("domain", domain)
 			continue
 		}
-		for _, ip := range ips {
-			for _, conn := range connections {
-				if conn.Raddr.IP == ip.String() {
-					log.Warn().
+		resolvedDomains[domain] = ips
+	}
+
+	for _, conn := range connections {
+		remoteIP := net.ParseIP(conn.Raddr.IP)
+		if remoteIP == nil {
+			continue
+		}
+
+		localAddr := fmt.Sprintf("%s:%d", conn.Laddr.IP, conn.Laddr.Port)
+		remoteAddr := fmt.Sprintf("%s:%d", conn.Raddr.IP, conn.Raddr.Port)
+
+		for domain, ips := range resolvedDomains {
+			for _, ip := range ips {
+				if remoteIP.Equal(ip) {
+					em.LogEvent(zerolog.WarnLevel, "Connection to file sharing service detected.").
 						Str("domain", domain).
 						Str("resolved_ip", ip.String()).
-						Str("local_addr", conn.Laddr.String()).
-						Str("remote_addr", conn.Raddr.String()).
-						Msg("Connection to file sharing service detected.")
+						Str("local_addr", localAddr).
+						Str("remote_addr", remoteAddr)
 				}
 			}
 		}

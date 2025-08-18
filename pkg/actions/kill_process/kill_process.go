@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"syscall"
 
 	"github.com/rs/zerolog/log"
 )
+
+// Implments Action interface
 
 // KillProcessAction implements the actions.Action interface. It is responsible for
 // terminating a process given its Process ID (PID).

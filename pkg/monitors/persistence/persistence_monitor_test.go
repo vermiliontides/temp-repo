@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"

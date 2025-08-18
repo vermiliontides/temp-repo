@@ -2,8 +2,6 @@ package filesystem
 
 import (
 	"context"
-	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -67,7 +62,7 @@ func TestFilesystemMonitor_Run(t *testing.T) {
 	assert.True(t, ok)
 
 	// Create a temporary directory for testing
-	testDir, err := ioutil.TempDir("", "fs_monitor_test")
+	testDir, err := os.MkdirTemp("", "fs_monitor_test")
 	require.NoError(t, err)
 	defer os.RemoveAll(testDir)
 
@@ -124,7 +119,7 @@ func TestFilesystemMonitor_Run(t *testing.T) {
 
 	// --- Simulate a file event ---
 	dummyFile := filepath.Join(testDir, "dummy.txt")
-	err = ioutil.WriteFile(dummyFile, []byte("test content"), 0644)
+	err = os.WriteFile(dummyFile, []byte("test content"), 0644)
 	require.NoError(t, err)
 
 	// Give time for fsnotify to pick up the event

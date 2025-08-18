@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
-	os/exec"
+	"os/exec"
 
 	"github.com/rs/zerolog/log"
 )
+
+// Implements Action interface
 
 // BlockIPAction implements the actions.Action interface. It is responsible for
 // blocking a given IP address using the system's firewall (iptables).

@@ -2,11 +2,13 @@ package firmware
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
-	"github.com/shirou/gopsutil/v3/host"
 )
 
 // FirmwareMonitor implements the scheduler.Monitor interface for firmware scanning.
@@ -32,18 +34,31 @@ func NewFirmwareMonitor(logger zerolog.Logger) scheduler.Monitor {
 func (fm *FirmwareMonitor) Run(ctx context.Context) {
 	fm.LogEvent(zerolog.InfoLevel, "Running Firmware Monitor...")
 
-	// Get BIOS information
-	bios, err := host.Info()
-	if err != nil {
-		fm.LogEvent(zerolog.ErrorLevel, "Failed to get BIOS information.")
-		return
-	}
+	vendor := fm.readDMIFile("bios_vendor")
+	version := fm.readDMIFile("bios_version")
+	date := fm.readDMIFile("bios_date")
 
-	fm.LogEvent(zerolog.InfoLevel, "BIOS Vendor: "+bios.BIOSVendor)
-	fm.LogEvent(zerolog.InfoLevel, "BIOS Version: "+bios.BIOSVersion)
-	fm.LogEvent(zerolog.InfoLevel, "BIOS Date: "+bios.BIOSDate)
+	if vendor != "unknown" || version != "unknown" || date != "unknown" {
+		fm.LogEvent(zerolog.InfoLevel, "BIOS information").
+			Str("vendor", vendor).
+			Str("version", version).
+			Str("date", date)
+	} else {
+		fm.LogEvent(zerolog.WarnLevel, "Could not retrieve complete BIOS information from DMI.")
+	}
 
 	// In a real implementation, you would compare this information against a database of known vulnerable firmware.
 
 	fm.LogEvent(zerolog.InfoLevel, "Firmware Monitor finished.")
+}
+
+// readDMIFile reads a specific file from the /sys/class/dmi/id/ directory.
+func (fm *FirmwareMonitor) readDMIFile(fileName string) string {
+	path := filepath.Join("/sys/class/dmi/id/", fileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		fm.LogEvent(zerolog.ErrorLevel, "Failed to read DMI file.").Err(err).Str("file", path)
+		return "unknown"
+	}
+	return strings.TrimSpace(string(content))
 }

@@ -4,43 +4,54 @@ import (
 	"context"
 	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/config"
+	"github.com/lucid-vigil/sentinel/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 
+// ConfigurableMonitor extends the Monitor interface to support configuration
+type ConfigurableMonitor interface {
+	Monitor
+	Configure(config map[string]interface{}) error
+}
+
 // Monitor defines the interface for any monitor that can be scheduled.
-// Each monitor must provide a name for identification and a Run method for execution.
 type Monitor interface {
-	// Name returns the unique name of the monitor.
 	Name() string
-	// Run executes the monitor's logic. It is passed a context for cancellation.
 	Run(ctx context.Context)
 }
 
-// Scheduler manages the registration and execution of various monitors based on the
-// application configuration.
+// Scheduler manages the registration and execution of various monitors.
 type Scheduler struct {
 	monitors []Monitor
 	config   *config.Config
 }
 
 // NewScheduler creates and returns a new Scheduler instance.
-// It requires an application configuration to determine which monitors to run.
 func NewScheduler(cfg *config.Config) *Scheduler {
 	return &Scheduler{
 		config: cfg,
 	}
 }
 
-// RegisterMonitor adds a monitor to the scheduler's list of monitors to be run.
+// RegisterMonitor adds a monitor to the scheduler's list.
 func (s *Scheduler) RegisterMonitor(m Monitor) {
+	// Check if monitor supports configuration
+	if configurable, ok := m.(ConfigurableMonitor); ok {
+		monitorConfig := s.config.GetMonitorConfig(m.Name())
+		if monitorConfig != nil && monitorConfig.Config != nil {
+			if err := configurable.Configure(monitorConfig.Config); err != nil {
+				log.Error().Err(err).Msgf("Failed to configure monitor '%s'", m.Name())
+				return
+			}
+			log.Info().Msgf("Monitor '%s' configured successfully.", m.Name())
+		}
+	}
+
 	s.monitors = append(s.monitors, m)
 	log.Info().Msgf("Monitor '%s' registered.", m.Name())
 }
 
-// Start iterates through the registered monitors, checks if they are enabled in the
-// configuration, and if so, launches them in their own goroutine to run at the
-// specified interval.
+// Start launches all enabled monitors with their configured intervals.
 func (s *Scheduler) Start(ctx context.Context) {
 	log.Info().Msg("Scheduler starting...")
 
@@ -85,10 +96,5 @@ func (s *Scheduler) runMonitor(ctx context.Context, m Monitor, interval time.Dur
 }
 
 func (s *Scheduler) getMonitorConfig(name string) *config.MonitorConfig {
-	for _, mc := range s.config.Monitors {
-		if mc.Name == name {
-			return &mc
-		}
-	}
-	return nil
+	return s.config.GetMonitorConfig(name)
 }

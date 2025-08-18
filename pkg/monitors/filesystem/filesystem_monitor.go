@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -80,7 +80,7 @@ func (fm *FilesystemMonitor) Run(ctx context.Context) {
 					return
 				}
 				fm.handleFilesystemEvent(event)
-			case err, ok := <-watcher.Errors:
+			case _, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
@@ -134,7 +134,8 @@ func (fm *FilesystemMonitor) handleFilesystemEvent(event fsnotify.Event) {
 		}
 	}
 
-	fm.LogEvent(zerolog.InfoLevel).Str("event", event.Op.String()).Str("file", event.Name).Msg("Filesystem event detected.")
+	//fm.LogEvent(zerolog.InfoLevel).Str("event", event.Op.String()).Str("file", event.Name).Msg("Filesystem event detected.")
+	fm.LogEvent(zerolog.InfoLevel, event.Op.String()).Str("file", event.Name).Msg("Filesystem event detected.")
 
 	switch {
 	case event.Op&fsnotify.Create == fsnotify.Create:
@@ -212,7 +213,7 @@ func (fm *FilesystemMonitor) checkPermissionChange(filePath string) {
 
 	// Check for world-writable files
 	perm := info.Mode().Perm()
-	if (perm&0002) != 0 {
+	if (perm & 0002) != 0 {
 		fm.LogEvent(zerolog.WarnLevel, "World-writable file detected.").Str("file_path", filePath).Str("permissions", perm.String())
 	}
 
@@ -288,7 +289,7 @@ func (fm *FilesystemMonitor) monitorSuidFiles() {
 func difference(a, b []string) []string {
 	mb := make(map[string]struct{}, len(b))
 	for _, x := range b {
-		mb[x] = struct{}{}?
+		mb[x] = struct{}{}
 	}
 	var diff []string
 	for _, x := range a {
@@ -435,7 +436,7 @@ func (fm *FilesystemMonitor) monitorDiskUsage() {
 		return
 	}
 
-	inodeUsagePercent := float64(inodeStat.Files - inodeStat.Ffree) / float64(inodeStat.Files) * 100
+	inodeUsagePercent := float64(inodeStat.Files-inodeStat.Ffree) / float64(inodeStat.Files) * 100
 	fm.LogEvent(zerolog.InfoLevel, "Inode usage monitored.").Float64("inode_usage_percent", inodeUsagePercent)
 
 	if inodeUsagePercent > 90 {

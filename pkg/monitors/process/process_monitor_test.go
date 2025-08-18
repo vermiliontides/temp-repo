@@ -325,4 +325,4 @@ my-test-masked-service-2.service masked enabled
 }
 
 // Override exec.Command for testing purposes
-var execCommand = exec.Command
+// TODO:var execCommand = exec.Command

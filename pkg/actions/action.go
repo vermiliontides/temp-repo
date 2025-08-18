@@ -4,6 +4,8 @@ import (
 	"context"
 )
 
+// Defines the Action interface
+
 // Action defines the interface for any defensive action Sentinel can take.
 // Each action must have a name and an execution method.
 type Action interface {

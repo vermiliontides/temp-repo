@@ -2,18 +2,17 @@ package certificate
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/kali-security-monitoring/sentinel/pkg/monitors/base"
-	"github.com/kali-security-monitoring/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/base"
+	"github.com/lucid-vigil/sentinel/pkg/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -88,14 +87,15 @@ func (cm *CertificateMonitor) checkCertificates() {
 		}
 
 		leafCert := certs[0] // Leaf certificate
-		fingerprint := hex.EncodeToString(leafCert.FingerprintSHA256)
+		hash := sha256.Sum256(leafCert.Raw)
+		fingerprint := hex.EncodeToString(hash[:])
 		baselineFile := filepath.Join(cm.config.BaselineDir, fmt.Sprintf("%s_%s.fp", domain, port))
 
 		// Compare with baseline fingerprint
-		baselineFP, err := ioutil.ReadFile(baselineFile)
+		baselineFP, err := os.ReadFile(baselineFile)
 		if os.IsNotExist(err) {
 			cm.LogEvent(zerolog.InfoLevel, "Creating new certificate baseline.").Str("domain", domain).Str("port", port)
-			err = ioutil.WriteFile(baselineFile, []byte(fingerprint), 0644)
+			err = os.WriteFile(baselineFile, []byte(fingerprint), 0644)
 			if err != nil {
 				cm.LogEvent(zerolog.ErrorLevel, "Failed to write baseline file.").Err(err).Str("file", baselineFile)
 			}
@@ -108,7 +108,7 @@ func (cm *CertificateMonitor) checkCertificates() {
 				Str("old_fingerprint", string(baselineFP)).
 				Str("new_fingerprint", fingerprint)
 			// Update baseline after change
-			err = ioutil.WriteFile(baselineFile, []byte(fingerprint), 0644)
+			err = os.WriteFile(baselineFile, []byte(fingerprint), 0644)
 			if err != nil {
 				cm.LogEvent(zerolog.ErrorLevel, "Failed to update baseline file.").Err(err).Str("file", baselineFile)
 			}
