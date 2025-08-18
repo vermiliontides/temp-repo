@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: victorialogs
+  labels:
+    app: victorialogs
+spec:
+  serviceName: "victorialogs"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victorialogs
+  template:
+    metadata:
+      labels:
+        app: victorialogs
+    spec:
+      containers:
+      - name: victorialogs
+        image: victoriametrics/victorialogs:latest # Use a specific version in production
+        ports:
+        - containerPort: 9428 # Default VictoriaLogs HTTP port
+          name: http
+        - containerPort: 1514 # Default Syslog port
+          name: syslog
+        volumeMounts:
+        - name: victorialogs-data
+          mountPath: /victorialogs-data
+  volumeClaimTemplates:
+  - metadata:
+      name: victorialogs-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi # Adjust storage size as needed

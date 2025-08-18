@@ -1,0 +1,52 @@
+log_level: info
+api_port: "8080"
+
+monitors:
+  - name: process_monitor
+    enabled: true
+    interval: 10s
+    actions:
+      - kill_process
+  - name: network_monitor
+    enabled: true
+    interval: 30s
+    actions:
+      - block_ip
+  - name: filesystem_monitor
+    enabled: true
+    interval: 1m
+    config:
+      suid_baseline_file: "/opt/security-monitoring/baseline_suid.txt"
+      config_baseline_dir: "/opt/security-monitoring/config_baselines"
+  - name: persistence_monitor
+    enabled: true
+    interval: 5m
+  - name: rootkit_monitor
+    enabled: true
+    interval: 1h
+  - name: thermal_monitor
+    enabled: true
+    interval: 30s
+    config:
+      temp_threshold: 75.0
+      cpu_threshold: 20.0
+  - name: firmware_monitor
+    enabled: true
+    interval: 1h
+  - name: network_ids
+    enabled: true
+    interval: 1m
+    config:
+      interface: "any"
+      rules:
+        - "icmp"
+        - "tcp port 22"
+  - name: recon_detector
+    enabled: true
+    interval: 1m
+    config:
+      syn_flood_threshold: 100
+      port_scan_threshold: 50
+
+actions:
+  enabled: false

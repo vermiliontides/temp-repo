@@ -1,0 +1,25 @@
+[Unit]
+Description=Sentinel Security Monitoring Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sentinel
+Restart=on-failure
+RestartSec=5s
+
+# Environment variables for configuration (optional, can be set via config.yaml)
+# Environment="SENTINEL_LOG_LEVEL=info"
+# Environment="SENTINEL_API_PORT=8080"
+
+# Security hardening (adjust as needed)
+# User=sentinel
+# Group=sentinel
+# CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+# PrivateTmp=true
+# ProtectSystem=full
+# ProtectHome=true
+# ReadWritePaths=/var/log/sentinel
+
+[Install]
+WantedBy=multi-user.target

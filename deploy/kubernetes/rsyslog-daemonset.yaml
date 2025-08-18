@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rsyslog
+  labels:
+    app: rsyslog
+spec:
+  selector:
+    matchLabels:
+      app: rsyslog
+  template:
+    metadata:
+      labels:
+        app: rsyslog
+    spec:
+      containers:
+      - name: rsyslog
+        image: rsyslog/rsyslog:8.2302.0 # Pinned version
+        volumeMounts:
+        - name: rsyslog-config
+          mountPath: /etc/rsyslog.d/
+        - name: var-log
+          mountPath: /var/log
+        - name: dev-log
+          mountPath: /dev/log
+        securityContext:
+          privileged: true # Required for accessing /dev/log and other system resources
+      volumes:
+      - name: rsyslog-config
+        configMap:
+          name: rsyslog-config
+      - name: var-log
+        hostPath:
+          path: /var/log
+      - name: dev-log
+        hostPath:
+          path: /dev/log
+  # Create a ConfigMap for rsyslog configuration (e.g., sentinel-rsyslog.conf)
+  # apiVersion: v1
+  # kind: ConfigMap
+  # metadata:
+  #   name: rsyslog-config
+  # data:
+  #   sentinel.conf: |
+  #     # Content of sentinel-rsyslog.conf

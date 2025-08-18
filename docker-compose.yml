@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  victorialogs:
+    image: victoriametrics/victorialogs:latest
+    container_name: victorialogs
+    ports:
+      - "9428:9428" # HTTP port
+      - "1514:1514/tcp" # Syslog TCP
+      - "1514:1514/udp" # Syslog UDP
+    volumes:
+      - victorialogs_data:/victorialogs-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9428/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  sentinel:
+    build:
+      context: .
+      dockerfile: ./build/package/Dockerfile
+    container_name: sentinel
+    ports:
+      - "8080:8080" # API port
+    volumes:
+      - ./config.yaml:/etc/sentinel/config.yaml:ro # Mount config file
+    environment:
+      # Example of overriding config via environment variables
+      # SENTINEL_LOG_LEVEL: debug
+      # SENTINEL_API_PORT: 8080
+      # Point rsyslog to victorialogs service name
+      VICTORIALOGS_HOST: victorialogs
+      VICTORIALOGS_PORT: 1514
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+    # Ensure sentinel logs go to stdout/stderr for rsyslog to pick up
+    logging:
+      driver: "json-file"
+
+  rsyslog:
+    image: rsyslog/rsyslog:8.2302.0
+    container_name: rsyslog
+    volumes:
+      - ./deploy/rsyslog/sentinel-rsyslog.conf:/etc/rsyslog.d/sentinel.conf:ro
+      # Mount a volume for rsyslog to write local logs if needed
+      - rsyslog_logs:/var/log/sentinel
+    environment:
+      # Pass VictoriaLogs host to rsyslog config if needed (e.g., via template)
+      VICTORIALOGS_HOST: victorialogs
+      VICTORIALOGS_PORT: 1514
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+
+volumes:
+  victorialogs_data:
+  rsyslog_logs:

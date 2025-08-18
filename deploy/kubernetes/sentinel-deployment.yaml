@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel
+  labels:
+    app: sentinel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sentinel
+  template:
+    metadata:
+      labels:
+        app: sentinel
+    spec:
+      containers:
+      - name: sentinel
+        image: sentinel:v1.0.0 # Pinned version
+        imagePullPolicy: IfNotPresent # Use Always for production, IfNotPresent for local testing
+        ports:
+        - containerPort: 8080
+          name: http-api
+        env:
+        - name: SENTINEL_LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: sentinel-config
+              key: config.yaml # Assuming log_level is directly in config.yaml
+        - name: SENTINEL_API_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: sentinel-config
+              key: config.yaml # Assuming api_port is directly in config.yaml
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000 # Example non-root user ID
+          runAsGroup: 1000 # Example non-root group ID
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/sentinel
+      volumes:
+      - name: config-volume
+        configMap:
+          name: sentinel-config
