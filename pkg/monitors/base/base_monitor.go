@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lucid-vigil/sentinel/pkg/actions"
+	"github.com/lucid-vigil/sentinel/pkg/errors"
 	"github.com/rs/zerolog"
 )
 
@@ -21,6 +22,7 @@ type BaseMonitor struct {
 	mu                sync.Mutex
 	dispatcher        *actions.ActionDispatcher
 	configuredActions []string
+	errorHandler      *errors.ErrorHandler
 }
 
 // NewBaseMonitor creates and initializes a new BaseMonitor
