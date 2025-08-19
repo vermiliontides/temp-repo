@@ -20,9 +20,11 @@ type SentryMonitor struct {
 }
 
 type SentryConfig struct {
-	HighValuePaths    []string `mapstructure:"high_value_paths"`
-	CriticalProcesses []string `mapstructure:"critical_processes"`
-	ResponseMode      string   `mapstructure:"response_mode"` // "monitor", "respond", "aggressive"
+	HighValuePaths     []string `mapstructure:"high_value_paths"`
+	CriticalProcesses  []string `mapstructure:"critical_processes"`
+	ResponseMode       string   `mapstructure:"response_mode"` // "monitor", "respond", "aggressive"
+	UploadThresholdMB  int      `mapstructure:"upload_threshold_mb`
+	FileSharingDomains []string `mapstructure:"file_sharing_domains"`
 }
 
 type ThreatEvent struct {
@@ -32,6 +34,12 @@ type ThreatEvent struct {
 	Timestamp time.Time
 	Actions   []string
 }
+
+// type ExfiltrationMonitorConfig struct {
+// 	UploadThresholdMB  int      `mapstructure:"upload_threshold_mb"`
+// 	FileSharingDomains []string `mapstructure:"file_sharing_domains"`
+// 	RunInterval        int      `mapstructure:"run_interval"`
+// }
 
 func NewSentryMonitor(logger zerolog.Logger) scheduler.Monitor {
 	return &SentryMonitor{

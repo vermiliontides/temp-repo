@@ -124,3 +124,31 @@ func (b *BaseMonitor) RecordExecution(err error) {
 	b.lastRun = time.Now()
 	b.lastError = err
 }
+
+func (b *BaseMonitor) HandleError(ctx context.Context, errorType string, message string, cause error, recoverable bool) {
+	monitorError := &MonitorError{
+		MonitorName: b.name,
+		ErrorType:   errorType,
+		Message:     message,
+		Timestamp:   time.Now(),
+		Severity:    SeverityMedium, // Default, monitors can override
+		Recoverable: recoverable,
+		Cause:       cause,
+	}
+
+	// If error handler is configured, use it
+	if b.errorHandler != nil {
+		b.errorHandler.HandleError(ctx, monitorError)
+	} else {
+		// Fallback to basic logging
+		b.logger.Error().
+			Str("error_type", errorType).
+			Str("message", message).
+			Bool("recoverable", recoverable).
+			AnErr("cause", cause).
+			Msg("Monitor error")
+	}
+
+	// Record execution error
+	b.RecordExecution(monitorError)
+}

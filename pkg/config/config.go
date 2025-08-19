@@ -1,77 +1,114 @@
-// Enhanced config.go to support monitor-specific configurations
-
+// pkg/config/monitor_configs.go
 package config
 
-import (
-	"fmt"
-	"strings"
+import "time"
 
-	"github.com/spf13/viper"
-)
+// MonitorConfigs holds all monitor-specific configurations
+type MonitorConfigs struct {
+	Sentry   SentryConfig   `mapstructure:"sentry"`
+	Sentinel SentinelConfig `mapstructure:"sentinel"`
+	Detector DetectorConfig `mapstructure:"detector"`
+	Analyzer AnalyzerConfig `mapstructure:"analyzer"`
+	Scribe   ScribeConfig   `mapstructure:"scribe"`
+}
 
-// Config is the top-level configuration struct for the application.
+// SentryConfig for high-value target protection
+type SentryConfig struct {
+	Enabled           bool          `mapstructure:"enabled"`
+	Interval          time.Duration `mapstructure:"interval"`
+	HighValuePaths    []string      `mapstructure:"high_value_paths"`
+	CriticalProcesses []string      `mapstructure:"critical_processes"`
+	ResponseMode      string        `mapstructure:"response_mode"` // monitor, respond, aggressive
+	Actions           []string      `mapstructure:"actions"`
+}
+
+// SentinelConfig for system-wide monitoring
+type SentinelConfig struct {
+	Enabled            bool          `mapstructure:"enabled"`
+	Interval           time.Duration `mapstructure:"interval"`
+	SystemHealth       bool          `mapstructure:"system_health"`
+	ResourceMonitoring bool          `mapstructure:"resource_monitoring"`
+	NetworkMonitoring  bool          `mapstructure:"network_monitoring"`
+	ProcessMonitoring  bool          `mapstructure:"process_monitoring"`
+	CPUThreshold       float64       `mapstructure:"cpu_threshold"`
+	MemoryThreshold    float64       `mapstructure:"memory_threshold"`
+	DiskThreshold      float64       `mapstructure:"disk_threshold"`
+	Actions            []string      `mapstructure:"actions"`
+}
+
+// DetectorConfig for ML-based detection
+type DetectorConfig struct {
+	Enabled             bool          `mapstructure:"enabled"`
+	Interval            time.Duration `mapstructure:"interval"`
+	MachineLearning     bool          `mapstructure:"machine_learning"`
+	BehaviorAnalysis    bool          `mapstructure:"behavior_analysis"`
+	AnomalyThreshold    float64       `mapstructure:"anomaly_threshold"`
+	LearningPeriod      time.Duration `mapstructure:"learning_period"`
+	ModelUpdateInterval time.Duration `mapstructure:"model_update_interval"`
+	FeatureEngineering  bool          `mapstructure:"feature_engineering"`
+	Actions             []string      `mapstructure:"actions"`
+}
+
+// AnalyzerConfig for incident analysis
+type AnalyzerConfig struct {
+	Enabled               bool          `mapstructure:"enabled"`
+	Interval              time.Duration `mapstructure:"interval"`
+	CorrelationEngine     bool          `mapstructure:"correlation_engine"`
+	ThreatIntelligence    bool          `mapstructure:"threat_intelligence"`
+	ContainmentStrategies []string      `mapstructure:"containment_strategies"`
+	ResponseAutomation    bool          `mapstructure:"response_automation"`
+	Actions               []string      `mapstructure:"actions"`
+}
+
+// ScribeConfig for forensic documentation
+type ScribeConfig struct {
+	Enabled         bool          `mapstructure:"enabled"`
+	Interval        time.Duration `mapstructure:"interval"`
+	EvidenceStorage string        `mapstructure:"evidence_storage"`
+	ReportFormats   []string      `mapstructure:"report_formats"`
+	ChainOfCustody  bool          `mapstructure:"chain_of_custody"`
+	DigitalSigning  bool          `mapstructure:"digital_signing"`
+	LegalCompliance []string      `mapstructure:"legal_compliance"`
+	RetentionDays   int           `mapstructure:"retention_days"`
+	Actions         []string      `mapstructure:"actions"`
+}
+
+// Enhanced main config to include monitor configs
 type Config struct {
-	LogLevel string          `mapstructure:"log_level"`
-	APIPort  string          `mapstructure:"api_port"`
-	Monitors []MonitorConfig `mapstructure:"monitors"`
-	Actions  ActionsConfig   `mapstructure:"actions"`
+	LogLevel string         `mapstructure:"log_level"`
+	APIPort  string         `mapstructure:"api_port"`
+	Actions  ActionsConfig  `mapstructure:"actions"`
+	Monitors MonitorConfigs `mapstructure:"monitors"`
+
+	// Legacy support during transition
+	LegacyMonitors []MonitorConfig `mapstructure:"legacy_monitors,omitempty"`
 }
 
-// MonitorConfig defines the configuration for a single monitor.
-type MonitorConfig struct {
-	Name     string                 `mapstructure:"name"`
-	Enabled  bool                   `mapstructure:"enabled"`
-	Interval string                 `mapstructure:"interval"`
-	Actions  []string               `mapstructure:"actions"`
-	Config   map[string]interface{} `mapstructure:"config"` // Monitor-specific config
-}
-
-// ActionsConfig holds the global configuration for all defensive actions.
-type ActionsConfig struct {
-	Enabled bool `mapstructure:"enabled"`
-}
-
-// GetMonitorConfig returns the configuration for a specific monitor by name
-func (c *Config) GetMonitorConfig(name string) *MonitorConfig {
-	for i, monitor := range c.Monitors {
-		if monitor.Name == name {
-			return &c.Monitors[i]
-		}
-	}
+// ValidateConfig ensures all configurations are valid
+func (c *Config) ValidateConfig() error {
+	// Add validation logic here
 	return nil
 }
 
-// LoadConfig reads the configuration from a YAML file and environment variables.
-func LoadConfig() (*Config, error) {
-	v := viper.New()
-	v.SetConfigName("config")
-	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
-	v.AddConfigPath("/etc/sentinel/")
+// GetEnabledMonitors returns list of enabled monitor names
+func (c *Config) GetEnabledMonitors() []string {
+	var enabled []string
 
-	// Set default values
-	v.SetDefault("log_level", "info")
-	v.SetDefault("api_port", "8080")
-	v.SetDefault("actions.enabled", false)
-
-	// Read environment variables
-	v.SetEnvPrefix("SENTINEL")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	// Read configuration file
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			fmt.Println("Config file not found, using defaults and environment variables.")
-		} else {
-			return nil, fmt.Errorf("failed to read config file: %w", err)
-		}
+	if c.Monitors.Sentry.Enabled {
+		enabled = append(enabled, "sentry")
+	}
+	if c.Monitors.Sentinel.Enabled {
+		enabled = append(enabled, "sentinel")
+	}
+	if c.Monitors.Detector.Enabled {
+		enabled = append(enabled, "detector")
+	}
+	if c.Monitors.Analyzer.Enabled {
+		enabled = append(enabled, "analyzer")
+	}
+	if c.Monitors.Scribe.Enabled {
+		enabled = append(enabled, "scribe")
 	}
 
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	return &cfg, nil
+	return enabled
 }
