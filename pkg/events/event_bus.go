@@ -31,6 +31,25 @@ const (
 	EventSystemStateChange       EventType = "system_state_change"
 	EventConfigurationChange     EventType = "configuration_change"
 	EventSecurityPolicyViolation EventType = "security_policy_violation"
+	// /pkg/monitors/analyzer.go
+	EventPrivilegeEscalation EventType = "privilege_escalation"
+	EventSuspiciousNetwork   EventType = "suspicious_network"
+	EventMalwareDetected     EventType = "malware_detected"
+	EventRootkitDetected     EventType = "rootkit_detected"
+	EventSystemAnomaly       EventType = "system_anomaly"
+	// /pkg/monitors/scheduler.go
+	EventSystemStatus EventType = "system_status"
+	EventSystemError  EventType = "system_error"
+	// /pkg/monitors/scribe.go
+	EventComplianceStatus EventType = "compliance_status"
+	EventCorrelation      EventType = "correlation"
+	// pkg/monitors/sentinel.go
+	EventAutomatedResponse EventType = "automated_response"
+	EventCertificateChange EventType = "certificate_change"
+	EventCertificateExpiry EventType = "certificate_expiry"
+	EventSystemReport      EventType = "system_report"
+	// /pkg/monitors/sentry.go
+	EventFirmwareChange EventType = "firmware_change"
 )
 
 // SecurityEvent represents a security event in the system

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/lucid-vigil/sentinel/pkg/config"
-	"github.com/lucid-vigil/sentinel/pkg/scheduler"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/scheduler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

@@ -41,7 +41,7 @@ When a new request is received, clarification on it should be requested. Specifi
     1.  **Sentry:** Guards high-value and high-risk targets. Reports regularly on status and proactively attacks threats.
     2.  **Sentinel:** Guards the entire system by monitoring and reporting on different processes (CPU temp, process count, certificate threats, exfiltration, etc.). Reports regularly on each aspect and proactively attacks threats.
     3.  **Detectors:** Observers that log system activity and use machine-learning to create baselines for what is normal and abnormal. Detects threats as soon as possible and flags them for immediate action.
-    4.  **Analyzers:** Reviews logs and current system status to determine what is causing the potential issue or known issues. Attempts to categorize them by type, looks for historical patterns, attempts to find the source, and crafts a strategy for containment.
+    4.  **Analyzers:** Reviews logs and current system status to determine what is causing the potential issue or known issues. Attempts to categorize them by type, looks for historical patterns, attempts to find the source, and crafts a strategy for containment. machine-learning and ai are expected to play a role.
     5.  **Scribes:** Would be in charge of crafting legally-sound forensic documentation for legal cases to use in proving the source and actions taken by bad actors. Generating non-technical and technical reports for each incident.
 - **Documentation:** TBD
 - **Tech Stack:**
@@ -49,7 +49,7 @@ When a new request is received, clarification on it should be requested. Specifi
     - **Admin UI:** React, Vite, Tailwind (v.4), TanStack Router
     - **Centralized Logging:** Victorialogs
     - **Cloud Architecture:** Kubernetes
-    - **Monitor API:** Golang, Rust, and Python.
+    - **Monitor API:** Go, Rust, and Python.
 
 ## Default Tech Choices
 - **Default Web API:** NestJS (TypeScript)
@@ -60,8 +60,9 @@ When a new request is received, clarification on it should be requested. Specifi
 - **Default Cloud Architecture:** Kubernetes
 - **Default Reverse-Proxy:** Nginx
 - **Default Authentication:** JSON Webtokens with Role based access (RBAC)
-- **Command Line Tools:** Golang for production-grade code. Python for experimentation/exploration.
-- **Optimization Concerns:** When code needs to be as efficient as possible, consider Java and Rust.
+- **Default Command Line Tools:** Go for production-grade code.
+- **Default Dev-Ops:** Go.
+- **Optimization Concerns:** Rust or Java.
 
 ## Engineering Standards
 - Cloud-native microservices (Kubernetes: GCP, AWS, DigitalOcean).
@@ -100,11 +101,10 @@ When a new request is received, clarification on it should be requested. Specifi
 - Code suggestions cannot include deprecated libraries or non-free options.
 
 ## MCP Servers
-- All requests require **sequential** planning to find the best solution.
-- No rushed solutions; all must be well thought out and ordered in steps.
-- Complex steps must be decomposed into sub-phases as necessary.
-- If completing requests require API knowledge, Gemini will prompt the user if it should use context7 to fulfill the request.
-- Gemini will use **context7** to gain deeper understanding of any APIs involved.
+- You will always use **sequential-thinking** when planning complex tasks.
+- No rushed solutions; we prioritize well-thought out designs and strategy over fast implementation with errors.
+- You will use **context7** when writing complex code refactors or complex code implementations.
+
 
 ## Refocus Protocol
 When any response to a request is repeated more than twice in a row or Gemini appears to be stuck in a loop, perform the following:
