@@ -1,14 +1,14 @@
-// pkg/monitors/enhanced/enhanced_sentinel.go
-// contains previous implementations:
-// certificate_monitor.go
-// communication_monitor.go
-// network_monitor.go
-// TODO: network_ids.go
-// TODO: persistence_monitor.go
-// TODO: process_monitor.go
-// TODO: recon_detector.go
-// TODO: thermal_monitor.go
-package enhanced
+// pkg/monitors/sentinel.go
+// Comprehensive system-wide security monitoring combining all SENTINEL capabilities:
+// - certificate_monitor.go
+// - communication_monitor.go
+// - network_monitor.go
+// - network_ids.go
+// - persistence_monitor.go
+// - process_monitor.go
+// - recon_detector.go
+// - thermal_monitor.go
+package monitors
 
 import (
 	"context"
@@ -16,10 +16,14 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +36,7 @@ import (
 	"github.com/lucid-vigil/sentinel/pkg/monitors/scheduler"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -56,8 +61,9 @@ type SentinelMonitor struct {
 	statsMutex     sync.RWMutex
 
 	// System monitoring components
-	processBaseline map[int32]*ProcessInfo
-	cpuTempBaseline []float64
+	processBaseline   map[int32]*ProcessInfo
+	previousProcesses map[int32]bool // For process creation monitoring
+	cpuTempBaseline   []float64
 
 	// Communication monitoring
 	resolvedBlocklist map[string][]net.IP
@@ -66,6 +72,10 @@ type SentinelMonitor struct {
 	lastRxBytes        uint64
 	lastTxBytes        uint64
 	lastBandwidthCheck time.Time
+
+	// Reconnaissance detection
+	synRecvCounts map[string]int
+	portScanCache map[string]time.Time
 
 	// Synchronization
 	mu               sync.RWMutex
@@ -121,6 +131,33 @@ type ComprehensiveSentinelConfig struct {
 	MonitorCriticalProcesses  []string `mapstructure:"monitor_critical_processes"`
 	ProcessMonitoringInterval string   `mapstructure:"process_monitoring_interval"`
 
+	// Process monitoring config (enhanced from process_monitor.go)
+	CPUThreshold    float64 `mapstructure:"cpu_threshold"`
+	MemoryThreshold float64 `mapstructure:"memory_threshold"`
+	SuspiciousNames string  `mapstructure:"suspicious_names"`
+	WhitelistUsers  string  `mapstructure:"whitelist_users"`
+
+	// Thermal monitoring config
+	TempThreshold     float64 `mapstructure:"temp_threshold"`
+	CPUUsageThreshold float64 `mapstructure:"cpu_usage_threshold"`
+
+	// Network IDS config
+	NetworkIDSEnabled bool     `mapstructure:"network_ids_enabled"`
+	IDSInterface      string   `mapstructure:"ids_interface"`
+	IDSRules          []string `mapstructure:"ids_rules"`
+
+	// Persistence monitoring config
+	PersistenceMonitoringEnabled bool `mapstructure:"persistence_monitoring_enabled"`
+	ScanCron                     bool `mapstructure:"scan_cron"`
+	ScanSystemd                  bool `mapstructure:"scan_systemd"`
+	ScanShellProfiles            bool `mapstructure:"scan_shell_profiles"`
+	ScanLdPreload                bool `mapstructure:"scan_ld_preload"`
+
+	// Reconnaissance detection config
+	ReconDetectionEnabled bool `mapstructure:"recon_detection_enabled"`
+	SynFloodThreshold     int  `mapstructure:"syn_flood_threshold"`
+	PortScanThreshold     int  `mapstructure:"port_scan_threshold"`
+
 	// Exfiltration detection config
 	ExfiltrationDetectionEnabled bool     `mapstructure:"exfiltration_detection_enabled"`
 	LargeUploadThresholdMB       int      `mapstructure:"large_upload_threshold_mb"`
@@ -129,7 +166,7 @@ type ComprehensiveSentinelConfig struct {
 	FileSharingDomains           []string `mapstructure:"file_sharing_domains"`
 }
 
-// Supporting data structures
+// Supporting data structures (keeping existing ones and adding new ones)
 type SystemBaseline struct {
 	InitialProcessCount int
 	BaselineCPUTemp     []float64
@@ -148,6 +185,10 @@ type ProcessInfo struct {
 	MemPercent float32   `json:"mem_percent"`
 	CreateTime int64     `json:"create_time"`
 	LastSeen   time.Time `json:"last_seen"`
+	Username   string    `json:"username"`
+	Cmdline    string    `json:"cmdline"`
+	PPID       int32     `json:"ppid"`
+	Terminal   string    `json:"terminal"`
 }
 
 type CommunicationBaseline struct {
@@ -206,6 +247,15 @@ type SystemHealth struct {
 	NetworkStats      NetworkStats
 	CriticalProcesses map[string]bool
 	Timestamp         time.Time
+	ThermalAnomalies  []ThermalAnomaly
+}
+
+type ThermalAnomaly struct {
+	SensorKey   string
+	Temperature float64
+	CPUUsage    float64
+	IsAnomalous bool
+	Timestamp   time.Time
 }
 
 // NewSentinelMonitor creates a comprehensive system-wide monitoring system
@@ -216,9 +266,12 @@ func NewSentinelMonitor(logger zerolog.Logger, eventBus *events.EventBus) schedu
 		certificateBaselines: make(map[string]string),
 		resolvedBlocklist:    make(map[string][]net.IP),
 		processBaseline:      make(map[int32]*ProcessInfo),
+		previousProcesses:    make(map[int32]bool),
 		dnsEvents:            make(chan DNSEvent, 1024),
 		stopDNSCapture:       make(chan struct{}),
 		clientStats:          make(map[string]*ClientStats),
+		synRecvCounts:        make(map[string]int),
+		portScanCache:        make(map[string]time.Time),
 		monitoringActive:     false,
 	}
 
@@ -230,6 +283,11 @@ func NewSentinelMonitor(logger zerolog.Logger, eventBus *events.EventBus) schedu
 	monitor.AddCapability("communication_monitoring")
 	monitor.AddCapability("network_monitoring")
 	monitor.AddCapability("system_monitoring")
+	monitor.AddCapability("process_monitoring")
+	monitor.AddCapability("thermal_monitoring")
+	monitor.AddCapability("network_ids")
+	monitor.AddCapability("persistence_monitoring")
+	monitor.AddCapability("recon_detection")
 	monitor.AddCapability("exfiltration_detection")
 	monitor.AddCapability("dns_analysis")
 
@@ -269,6 +327,10 @@ func (sm *SentinelMonitor) Configure(config map[string]interface{}) error {
 		sm.initializeCertificateMonitoring()
 	}
 
+	if sm.config.ReconDetectionEnabled {
+		sm.initializeReconDetection()
+	}
+
 	sm.LogEvent(zerolog.InfoLevel, "Comprehensive Sentinel Monitor configured successfully")
 	return nil
 }
@@ -283,17 +345,41 @@ func (sm *SentinelMonitor) Run(ctx context.Context) {
 	sm.monitoringActive = true
 	sm.mu.Unlock()
 
+	// Initialize process baseline on first run
+	if len(sm.previousProcesses) == 0 {
+		procs, err := process.Processes()
+		if err == nil {
+			for _, p := range procs {
+				sm.previousProcesses[p.Pid] = true
+			}
+		}
+	}
+
 	// Run all monitoring components concurrently
 	var wg sync.WaitGroup
 
-	// System monitoring (CPU, memory, processes)
+	// Enhanced system monitoring (CPU, memory, processes)
 	if sm.config.SystemMonitoringEnabled {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sm.runSystemMonitoring(ctx)
+			sm.runEnhancedSystemMonitoring(ctx)
 		}()
 	}
+
+	// Enhanced process monitoring
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sm.runEnhancedProcessMonitoring(ctx)
+	}()
+
+	// Thermal monitoring
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sm.runThermalMonitoring(ctx)
+	}()
 
 	// Certificate monitoring
 	if sm.config.CertificateMonitoringEnabled {
@@ -319,6 +405,33 @@ func (sm *SentinelMonitor) Run(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			sm.runNetworkMonitoring(ctx)
+		}()
+	}
+
+	// Network IDS
+	if sm.config.NetworkIDSEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sm.runNetworkIDS(ctx)
+		}()
+	}
+
+	// Persistence monitoring
+	if sm.config.PersistenceMonitoringEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sm.runPersistenceMonitoring(ctx)
+		}()
+	}
+
+	// Reconnaissance detection
+	if sm.config.ReconDetectionEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sm.runReconDetection(ctx)
 		}()
 	}
 
@@ -351,9 +464,9 @@ func (sm *SentinelMonitor) Run(ctx context.Context) {
 	sm.LogEvent(zerolog.InfoLevel, "Comprehensive Sentinel Monitor: System patrol completed")
 }
 
-// System monitoring implementation
-func (sm *SentinelMonitor) runSystemMonitoring(ctx context.Context) {
-	sm.LogEvent(zerolog.InfoLevel, "Running system monitoring...")
+// Enhanced system monitoring implementation
+func (sm *SentinelMonitor) runEnhancedSystemMonitoring(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running enhanced system monitoring...")
 
 	// Monitor CPU temperature
 	sm.monitorCPUTemperature(ctx)
@@ -371,6 +484,347 @@ func (sm *SentinelMonitor) runSystemMonitoring(ctx context.Context) {
 	sm.assessSystemHealth(ctx)
 }
 
+// Enhanced process monitoring (combining original and process_monitor.go features)
+func (sm *SentinelMonitor) runEnhancedProcessMonitoring(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running enhanced process monitoring...")
+
+	// Monitor resource usage
+	sm.monitorResourceUsage(ctx)
+
+	// Detect suspicious processes
+	sm.detectSuspiciousProcesses(ctx)
+
+	// Monitor process creation
+	sm.monitorProcessCreation(ctx)
+
+	// Detect hidden processes
+	sm.detectHiddenProcesses(ctx)
+
+	// Monitor process tree
+	sm.monitorProcessTree(ctx)
+
+	// Monitor detached processes
+	sm.monitorDetachedProcesses(ctx)
+
+	// Monitor systemd services
+	sm.monitorSystemdServices(ctx)
+}
+
+// Thermal monitoring implementation (from thermal_monitor.go)
+func (sm *SentinelMonitor) runThermalMonitoring(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running thermal monitoring...")
+
+	temps, err := host.SensorsTemperatures()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get sensor temperatures").Err(err)
+		return
+	}
+
+	cpuPercentages, err := cpu.Percent(0, false)
+	if err != nil || len(cpuPercentages) == 0 {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get CPU usage").Err(err)
+		return
+	}
+	avgCPUUsage := cpuPercentages[0]
+
+	var thermalAnomalies []ThermalAnomaly
+
+	for _, temp := range temps {
+		sm.LogEvent(zerolog.DebugLevel, "Current sensor temperature").
+			Str("sensor", temp.SensorKey).
+			Float64("temperature", temp.Temperature)
+
+		// Check for high temperature with low CPU usage anomaly
+		if temp.Temperature > sm.config.TempThreshold && avgCPUUsage < sm.config.CPUUsageThreshold {
+			anomaly := ThermalAnomaly{
+				SensorKey:   temp.SensorKey,
+				Temperature: temp.Temperature,
+				CPUUsage:    avgCPUUsage,
+				IsAnomalous: true,
+				Timestamp:   time.Now(),
+			}
+			thermalAnomalies = append(thermalAnomalies, anomaly)
+
+			sm.PublishEvent(ctx, events.EventSystemAnomaly, "thermal_anomaly",
+				fmt.Sprintf("THERMAL ANOMALY: High temperature (%.1f°C) with low CPU usage (%.1f%%) - possible hidden process",
+					temp.Temperature, avgCPUUsage),
+				"high", map[string]interface{}{
+					"sensor":      temp.SensorKey,
+					"temperature": temp.Temperature,
+					"cpu_usage":   avgCPUUsage,
+					"threshold":   sm.config.TempThreshold,
+				})
+		}
+
+		// Check for sustained high temperature
+		if temp.Temperature > sm.config.TempThreshold {
+			sm.LogEvent(zerolog.InfoLevel, "High temperature detected").
+				Str("sensor", temp.SensorKey).
+				Float64("temperature", temp.Temperature)
+		}
+	}
+
+	sm.UpdateState("thermal_anomalies", thermalAnomalies)
+}
+
+// Network IDS implementation (from network_ids.go)
+func (sm *SentinelMonitor) runNetworkIDS(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running Network IDS...")
+
+	iface := sm.config.IDSInterface
+	if iface == "" {
+		iface = sm.config.NetworkInterface
+	}
+	if iface == "" {
+		iface = "any"
+	}
+
+	// Validate interface name
+	if !sm.isValidInterfaceName(iface) {
+		sm.LogEvent(zerolog.ErrorLevel, "Invalid network interface name").
+			Str("interface", iface)
+		return
+	}
+
+	for _, rule := range sm.config.IDSRules {
+		// Sanitize tcpdump rule to prevent command injection
+		sanitizedRule := sm.sanitizeTcpdumpRule(rule)
+		if sanitizedRule == "" {
+			sm.LogEvent(zerolog.WarnLevel, "Skipping empty or invalid rule").
+				Str("rule", rule)
+			continue
+		}
+
+		sm.LogEvent(zerolog.DebugLevel, "Applying IDS rule").
+			Str("rule", sanitizedRule)
+
+		cmd := exec.CommandContext(ctx, "tcpdump", "-i", iface, "-c", "1", sanitizedRule)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			// tcpdump exits with status 1 if no packets are captured, so we don't log that as an error.
+			if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+				continue
+			}
+			sm.LogEvent(zerolog.ErrorLevel, "Failed to run tcpdump").
+				Err(err).Str("rule", sanitizedRule)
+			continue
+		}
+
+		if len(output) > 0 {
+			sm.PublishEvent(ctx, events.EventSuspiciousNetwork, "network_ids_rule_matched",
+				fmt.Sprintf("Network IDS rule matched: %s", sanitizedRule),
+				"medium", map[string]interface{}{
+					"rule":          sanitizedRule,
+					"captured_data": string(output),
+					"interface":     iface,
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "Network IDS rule matched").
+				Str("rule", sanitizedRule).
+				Str("captured_packet", string(output))
+		}
+	}
+}
+
+// Persistence monitoring implementation (from persistence_monitor.go)
+func (sm *SentinelMonitor) runPersistenceMonitoring(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running persistence monitoring...")
+
+	if sm.config.ScanCron {
+		sm.scanCron(ctx)
+	}
+	if sm.config.ScanSystemd {
+		sm.scanSystemd(ctx)
+	}
+	if sm.config.ScanShellProfiles {
+		sm.scanShellProfiles(ctx)
+	}
+	if sm.config.ScanLdPreload {
+		sm.scanLdPreload(ctx)
+	}
+}
+
+// Reconnaissance detection implementation (from recon_detector.go)
+func (sm *SentinelMonitor) runReconDetection(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Running reconnaissance detection...")
+
+	sm.detectPortScans(ctx)
+	sm.detectSynFloods(ctx)
+}
+
+// Process monitoring implementations (enhanced from process_monitor.go)
+func (sm *SentinelMonitor) monitorResourceUsage(ctx context.Context) {
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list for resource usage monitoring").Err(err)
+		return
+	}
+
+	for _, p := range procs {
+		cpuPercent, err := p.CPUPercent()
+		if err != nil {
+			continue
+		}
+		memPercent, err := p.MemoryPercent()
+		if err != nil {
+			continue
+		}
+
+		if cpuPercent > sm.config.CPUThreshold {
+			name, _ := p.Name()
+			cmdline, _ := p.Cmdline()
+
+			sm.PublishEvent(ctx, events.EventSystemAnomaly, "high_cpu_usage",
+				fmt.Sprintf("High CPU usage detected: %s (%.1f%%)", name, cpuPercent),
+				"medium", map[string]interface{}{
+					"pid":         p.Pid,
+					"name":        name,
+					"cmdline":     cmdline,
+					"cpu_percent": cpuPercent,
+					"threshold":   sm.config.CPUThreshold,
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "High CPU usage detected").
+				Int32("pid", p.Pid).
+				Str("name", name).
+				Str("cmdline", cmdline).
+				Float64("cpu_percent", cpuPercent)
+		}
+
+		if float64(memPercent) > sm.config.MemoryThreshold {
+			name, _ := p.Name()
+			cmdline, _ := p.Cmdline()
+
+			sm.PublishEvent(ctx, events.EventSystemAnomaly, "high_memory_usage",
+				fmt.Sprintf("High memory usage detected: %s (%.1f%%)", name, float64(memPercent)),
+				"medium", map[string]interface{}{
+					"pid":            p.Pid,
+					"name":           name,
+					"cmdline":        cmdline,
+					"memory_percent": float64(memPercent),
+					"threshold":      sm.config.MemoryThreshold,
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "High memory usage detected").
+				Int32("pid", p.Pid).
+				Str("name", name).
+				Str("cmdline", cmdline).
+				Float64("memory_percent", float64(memPercent))
+		}
+	}
+}
+
+func (sm *SentinelMonitor) detectSuspiciousProcesses(ctx context.Context) {
+	suspiciousPatterns := strings.Split(sm.config.SuspiciousNames, ",")
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list for suspicious process detection").Err(err)
+		return
+	}
+
+	for _, p := range procs {
+		name, _ := p.Name()
+		cmdline, _ := p.Cmdline()
+
+		for _, pattern := range suspiciousPatterns {
+			if pattern == "" {
+				continue
+			}
+
+			// Clean the pattern for regex
+			pattern = strings.TrimSpace(pattern)
+
+			matched, err := regexp.MatchString("(?i)"+regexp.QuoteMeta(pattern), name)
+			if err != nil {
+				sm.LogEvent(zerolog.ErrorLevel, "Invalid regex pattern").
+					Str("pattern", pattern).Err(err)
+				continue
+			}
+			if matched {
+				sm.PublishEvent(ctx, events.EventSuspiciousProcess, "suspicious_process_name",
+					fmt.Sprintf("Suspicious process name detected: %s", name),
+					"high", map[string]interface{}{
+						"pid":     p.Pid,
+						"name":    name,
+						"cmdline": cmdline,
+						"pattern": pattern,
+					})
+
+				sm.LogEvent(zerolog.ErrorLevel, "Suspicious process name detected").
+					Int32("pid", p.Pid).
+					Str("name", name).
+					Str("cmdline", cmdline).
+					Str("pattern", pattern)
+			}
+
+			matched, err = regexp.MatchString("(?i)"+regexp.QuoteMeta(pattern), cmdline)
+			if err != nil {
+				continue
+			}
+			if matched {
+				sm.PublishEvent(ctx, events.EventSuspiciousProcess, "suspicious_process_cmdline",
+					fmt.Sprintf("Suspicious process command line detected: %s", cmdline),
+					"high", map[string]interface{}{
+						"pid":     p.Pid,
+						"name":    name,
+						"cmdline": cmdline,
+						"pattern": pattern,
+					})
+
+				sm.LogEvent(zerolog.ErrorLevel, "Suspicious process command line detected").
+					Int32("pid", p.Pid).
+					Str("name", name).
+					Str("cmdline", cmdline).
+					Str("pattern", pattern)
+			}
+		}
+	}
+}
+
+func (sm *SentinelMonitor) monitorProcessCreation(ctx context.Context) {
+	currentProcesses := make(map[int32]bool)
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get current process list for creation monitoring").Err(err)
+		return
+	}
+
+	for _, p := range procs {
+		currentProcesses[p.Pid] = true
+		if _, exists := sm.previousProcesses[p.Pid]; !exists {
+			name, _ := p.Name()
+			cmdline, _ := p.Cmdline()
+			username, _ := p.Username()
+
+			// Log the new process creation event
+			sm.LogEvent(zerolog.InfoLevel, "New process detected").
+				Int32("pid", p.Pid).
+				Str("name", name).
+				Str("cmdline", cmdline).
+				Str("username", username).
+				Msg("Process created")
+		}
+	}
+
+	// Update the previous processes map for next iteration
+	sm.previousProcesses = currentProcesses
+}
+
+func (sm *SentinelMonitor) sanitizeTcpdumpRule(rule string) string {
+	// Remove or replace characters that could be used for command injection.
+	// This is a simplistic approach. For complex rules, a dedicated parser is better.
+	rule = strings.ReplaceAll(rule, ";", "")
+	rule = strings.ReplaceAll(rule, "&", "")
+	rule = strings.ReplaceAll(rule, "|", "")
+	rule = strings.ReplaceAll(rule, "`", "")
+	rule = strings.ReplaceAll(rule, "$", "")
+	rule = strings.ReplaceAll(rule, "(", "")
+	rule = strings.ReplaceAll(rule, ")", "")
+	rule = strings.TrimSpace(rule)
+	return rule
+}
+
+// Keep all existing monitoring methods from the original sentinel.go
 func (sm *SentinelMonitor) monitorCPUTemperature(ctx context.Context) {
 	temps, err := host.SensorsTemperatures()
 	if err != nil {
@@ -412,43 +866,52 @@ func (sm *SentinelMonitor) monitorProcesses(ctx context.Context) {
 		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list").Err(err)
 		return
 	}
-
 	currentProcesses := make(map[int32]*ProcessInfo)
 	criticalProcessStatus := make(map[string]bool)
-
 	// Initialize critical process tracking
 	for _, procName := range sm.config.MonitorCriticalProcesses {
 		criticalProcessStatus[procName] = false
 	}
-
 	for _, p := range processes {
 		name, err := p.Name()
 		if err != nil {
 			continue
 		}
-
 		cpuPercent, _ := p.CPUPercent()
 		memPercent, _ := p.MemoryPercent()
 		createTime, _ := p.CreateTime()
-		status, _ := p.Status()
+		statusSlice, _ := p.Status()
+		username, _ := p.Username()
+		cmdline, _ := p.Cmdline()
+		ppid, _ := p.Ppid()
+		terminal, _ := p.Terminal()
+
+		// Convert status slice to string
+		var statusStr string
+		if len(statusSlice) > 0 {
+			statusStr = statusSlice[0] // Take the first status if multiple exist
+		} else {
+			statusStr = "unknown"
+		}
 
 		procInfo := &ProcessInfo{
 			PID:        p.Pid,
 			Name:       name,
-			Status:     status,
+			Status:     statusStr, // Now using the converted string
 			CPUPercent: cpuPercent,
 			MemPercent: memPercent,
 			CreateTime: createTime,
 			LastSeen:   time.Now(),
+			Username:   username,
+			Cmdline:    cmdline,
+			PPID:       ppid,
+			Terminal:   terminal,
 		}
-
 		currentProcesses[p.Pid] = procInfo
-
 		// Check if this is a critical process
 		for _, criticalProc := range sm.config.MonitorCriticalProcesses {
 			if strings.Contains(strings.ToLower(name), strings.ToLower(criticalProc)) {
 				criticalProcessStatus[criticalProc] = true
-
 				// Check for suspicious resource usage
 				if cpuPercent > 80.0 {
 					sm.PublishEvent(ctx, events.EventSystemAnomaly, "high_cpu_usage",
@@ -462,7 +925,6 @@ func (sm *SentinelMonitor) monitorProcesses(ctx context.Context) {
 			}
 		}
 	}
-
 	// Check for missing critical processes
 	for procName, isRunning := range criticalProcessStatus {
 		if !isRunning {
@@ -473,7 +935,6 @@ func (sm *SentinelMonitor) monitorProcesses(ctx context.Context) {
 				})
 		}
 	}
-
 	// Check process count threshold
 	processCount := len(currentProcesses)
 	if sm.config.ProcessCountThreshold > 0 && processCount > sm.config.ProcessCountThreshold {
@@ -484,14 +945,11 @@ func (sm *SentinelMonitor) monitorProcesses(ctx context.Context) {
 				"threshold":     sm.config.ProcessCountThreshold,
 			})
 	}
-
 	sm.mu.Lock()
 	sm.processBaseline = currentProcesses
 	sm.mu.Unlock()
-
 	sm.UpdateState("process_count", processCount)
 	sm.UpdateState("critical_process_status", criticalProcessStatus)
-
 	sm.LogEvent(zerolog.InfoLevel, "Process monitoring completed").
 		Int("total_processes", processCount).
 		Int("critical_processes", len(sm.config.MonitorCriticalProcesses))
@@ -1570,6 +2028,17 @@ func (sm *SentinelMonitor) generateSystemReport(ctx context.Context) {
 			"blocklist_domains":      len(sm.config.DomainBlocklist),
 			"dns_clients_tracked":    len(sm.clientStats),
 		},
+		"component_status": map[string]interface{}{
+			"system_monitoring":        sm.config.SystemMonitoringEnabled,
+			"certificate_monitoring":   sm.config.CertificateMonitoringEnabled,
+			"communication_monitoring": sm.config.CommunicationMonitoringEnabled,
+			"network_monitoring":       sm.config.NetworkMonitoringEnabled,
+			"network_ids":              sm.config.NetworkIDSEnabled,
+			"persistence_monitoring":   sm.config.PersistenceMonitoringEnabled,
+			"recon_detection":          sm.config.ReconDetectionEnabled,
+			"thermal_monitoring":       true, // Always enabled
+			"exfiltration_detection":   sm.config.ExfiltrationDetectionEnabled,
+		},
 	}
 
 	sm.PublishEvent(ctx, events.EventSystemReport, "sentinel_report",
@@ -1597,9 +2066,20 @@ func (sm *SentinelMonitor) getActiveComponentCount() int {
 	if sm.config.NetworkMonitoringEnabled {
 		count++
 	}
+	if sm.config.NetworkIDSEnabled {
+		count++
+	}
+	if sm.config.PersistenceMonitoringEnabled {
+		count++
+	}
+	if sm.config.ReconDetectionEnabled {
+		count++
+	}
 	if sm.config.ExfiltrationDetectionEnabled {
 		count++
 	}
+	// Thermal monitoring is always active
+	count++
 	return count
 }
 
@@ -1615,6 +2095,10 @@ func (sm *SentinelMonitor) updateComprehensiveMetrics() {
 		"certificate_monitoring":   sm.config.CertificateMonitoringEnabled,
 		"communication_monitoring": sm.config.CommunicationMonitoringEnabled,
 		"network_monitoring":       sm.config.NetworkMonitoringEnabled,
+		"network_ids":              sm.config.NetworkIDSEnabled,
+		"persistence_monitoring":   sm.config.PersistenceMonitoringEnabled,
+		"recon_detection":          sm.config.ReconDetectionEnabled,
+		"thermal_monitoring":       true, // Always enabled
 		"exfiltration_detection":   sm.config.ExfiltrationDetectionEnabled,
 		"dns_analysis":             sm.config.NetworkMonitoringEnabled,
 	}
@@ -1718,6 +2202,16 @@ func (sm *SentinelMonitor) initializeCertificateMonitoring() {
 		Str("baseline_dir", sm.config.BaselineDir)
 }
 
+func (sm *SentinelMonitor) initializeReconDetection() {
+	// Initialize reconnaissance detection state
+	sm.synRecvCounts = make(map[string]int)
+	sm.portScanCache = make(map[string]time.Time)
+
+	sm.LogEvent(zerolog.InfoLevel, "Reconnaissance detection initialized").
+		Int("syn_flood_threshold", sm.config.SynFloodThreshold).
+		Int("port_scan_threshold", sm.config.PortScanThreshold)
+}
+
 func (sm *SentinelMonitor) loadCertificateBaselines() {
 	files, err := os.ReadDir(sm.config.BaselineDir)
 	if err != nil {
@@ -1757,6 +2251,7 @@ func (sm *SentinelMonitor) parseConfig(config map[string]interface{}) error {
 		"monitor_critical_processes": &sm.config.MonitorCriticalProcesses,
 		"suspicious_data_patterns":   &sm.config.SuspiciousDataPatterns,
 		"file_sharing_domains":       &sm.config.FileSharingDomains,
+		"ids_rules":                  &sm.config.IDSRules,
 	}
 
 	for key, ptr := range stringArrayConfigs {
@@ -1788,6 +2283,9 @@ func (sm *SentinelMonitor) parseConfig(config map[string]interface{}) error {
 		"network_interface":           &sm.config.NetworkInterface,
 		"stats_cleanup_interval":      &sm.config.StatsCleanupInterval,
 		"process_monitoring_interval": &sm.config.ProcessMonitoringInterval,
+		"suspicious_names":            &sm.config.SuspiciousNames,
+		"whitelist_users":             &sm.config.WhitelistUsers,
+		"ids_interface":               &sm.config.IDSInterface,
 	}
 
 	for key, ptr := range stringConfigs {
@@ -1803,6 +2301,8 @@ func (sm *SentinelMonitor) parseConfig(config map[string]interface{}) error {
 		"min_query_count_for_alert": &sm.config.MinQueryCountForAlert,
 		"process_count_threshold":   &sm.config.ProcessCountThreshold,
 		"large_upload_threshold_mb": &sm.config.LargeUploadThresholdMB,
+		"syn_flood_threshold":       &sm.config.SynFloodThreshold,
+		"port_scan_threshold":       &sm.config.PortScanThreshold,
 	}
 
 	for key, ptr := range intConfigs {
@@ -1824,6 +2324,10 @@ func (sm *SentinelMonitor) parseConfig(config map[string]interface{}) error {
 		"cpu_temperature_threshold": &sm.config.CPUTemperatureThreshold,
 		"memory_usage_threshold":    &sm.config.MemoryUsageThreshold,
 		"disk_usage_threshold":      &sm.config.DiskUsageThreshold,
+		"cpu_threshold":             &sm.config.CPUThreshold,
+		"memory_threshold":          &sm.config.MemoryThreshold,
+		"temp_threshold":            &sm.config.TempThreshold,
+		"cpu_usage_threshold":       &sm.config.CPUUsageThreshold,
 	}
 
 	for key, ptr := range floatConfigs {
@@ -1843,6 +2347,13 @@ func (sm *SentinelMonitor) parseConfig(config map[string]interface{}) error {
 		"enable_stateful_analysis":         &sm.config.EnableStatefulAnalysis,
 		"exfiltration_detection_enabled":   &sm.config.ExfiltrationDetectionEnabled,
 		"monitor_file_sharing":             &sm.config.MonitorFileSharing,
+		"network_ids_enabled":              &sm.config.NetworkIDSEnabled,
+		"persistence_monitoring_enabled":   &sm.config.PersistenceMonitoringEnabled,
+		"scan_cron":                        &sm.config.ScanCron,
+		"scan_systemd":                     &sm.config.ScanSystemd,
+		"scan_shell_profiles":              &sm.config.ScanShellProfiles,
+		"scan_ld_preload":                  &sm.config.ScanLdPreload,
+		"recon_detection_enabled":          &sm.config.ReconDetectionEnabled,
 	}
 
 	for key, ptr := range boolConfigs {
@@ -1905,6 +2416,30 @@ func (sm *SentinelMonitor) setConfigDefaults() {
 	}
 	if sm.config.ProcessMonitoringInterval == "" {
 		sm.config.ProcessMonitoringInterval = "30s"
+	}
+	if sm.config.CPUThreshold == 0 {
+		sm.config.CPUThreshold = 80.0
+	}
+	if sm.config.MemoryThreshold == 0 {
+		sm.config.MemoryThreshold = 80.0
+	}
+	if sm.config.TempThreshold == 0 {
+		sm.config.TempThreshold = 70.0
+	}
+	if sm.config.CPUUsageThreshold == 0 {
+		sm.config.CPUUsageThreshold = 20.0
+	}
+	if sm.config.SynFloodThreshold == 0 {
+		sm.config.SynFloodThreshold = 1000
+	}
+	if sm.config.PortScanThreshold == 0 {
+		sm.config.PortScanThreshold = 100
+	}
+	if sm.config.SuspiciousNames == "" {
+		sm.config.SuspiciousNames = "nc,netcat,socat,wget,curl"
+	}
+	if sm.config.WhitelistUsers == "" {
+		sm.config.WhitelistUsers = "root,system,daemon"
 	}
 }
 
@@ -1978,4 +2513,468 @@ func (sm *SentinelMonitor) IsMonitoringActive() bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.monitoringActive
+}
+
+func (sm *SentinelMonitor) detectHiddenProcesses(ctx context.Context) {
+	procDirs, err := os.ReadDir("/proc")
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to read /proc directory for hidden process detection").Err(err)
+		return
+	}
+
+	procPIDs := make(map[int32]bool)
+	for _, dir := range procDirs {
+		if dir.IsDir() {
+			pid, err := strconv.ParseInt(dir.Name(), 10, 32)
+			if err == nil {
+				procPIDs[int32(pid)] = true
+			}
+		}
+	}
+
+	gopsutilPIDs := make(map[int32]bool)
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list from gopsutil for hidden process detection").Err(err)
+		return
+	}
+	for _, p := range procs {
+		gopsutilPIDs[p.Pid] = true
+	}
+
+	hiddenCount := 0
+	for pid := range procPIDs {
+		if _, exists := gopsutilPIDs[pid]; !exists {
+			hiddenCount++
+			// Try to get command name from /proc/<pid>/comm
+			commPath := fmt.Sprintf("/proc/%d/comm", pid)
+			comm, readErr := os.ReadFile(commPath)
+			commStr := "unknown"
+			if readErr == nil {
+				commStr = strings.TrimSpace(string(comm))
+			}
+
+			sm.PublishEvent(ctx, events.EventSuspiciousProcess, "hidden_process",
+				fmt.Sprintf("Possible hidden process detected: %s (PID: %d)", commStr, pid),
+				"high", map[string]interface{}{
+					"pid":  pid,
+					"comm": commStr,
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "Possible hidden process detected").
+				Int32("pid", pid).
+				Str("comm", commStr)
+		}
+	}
+
+	if hiddenCount > 0 {
+		sm.LogEvent(zerolog.WarnLevel, "Summary: Hidden processes detected").
+			Int("hidden_count", hiddenCount)
+	}
+}
+
+func (sm *SentinelMonitor) monitorProcessTree(ctx context.Context) {
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list for process tree monitoring").Err(err)
+		return
+	}
+
+	for _, p := range procs {
+		ppid, err := p.Ppid()
+		if err != nil {
+			continue // Cannot get parent, skip
+		}
+		name, _ := p.Name()
+		cmdline, _ := p.Cmdline()
+
+		// Check for shells/interpreters with init (PID 1) as parent
+		if ppid == 1 {
+			isSuspicious := false
+			if strings.Contains(name, "sh") || strings.Contains(name, "bash") || strings.Contains(name, "dash") {
+				isSuspicious = true
+			} else if strings.Contains(name, "python") || strings.Contains(name, "perl") || strings.Contains(name, "ruby") {
+				isSuspicious = true
+			}
+
+			if isSuspicious {
+				sm.PublishEvent(ctx, events.EventSuspiciousProcess, "suspicious_parent_child",
+					fmt.Sprintf("Suspicious process with PID 1 as parent: %s", name),
+					"medium", map[string]interface{}{
+						"pid":     p.Pid,
+						"ppid":    ppid,
+						"name":    name,
+						"cmdline": cmdline,
+					})
+
+				sm.LogEvent(zerolog.WarnLevel, "Suspicious process with PID 1 as parent detected").
+					Int32("pid", p.Pid).
+					Int32("ppid", ppid).
+					Str("name", name).
+					Str("cmdline", cmdline)
+			}
+		}
+	}
+}
+
+func (sm *SentinelMonitor) monitorDetachedProcesses(ctx context.Context) {
+	whitelistUsers := strings.Split(sm.config.WhitelistUsers, ",")
+	procs, err := process.Processes()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get process list for detached process monitoring").Err(err)
+		return
+	}
+
+	for _, p := range procs {
+		terminal, err := p.Terminal()
+		if err != nil {
+			continue
+		}
+
+		if terminal == "" { // No TTY
+			username, err := p.Username()
+			if err != nil {
+				continue
+			}
+
+			isWhitelisted := false
+			for _, wu := range whitelistUsers {
+				if strings.TrimSpace(wu) == username {
+					isWhitelisted = true
+					break
+				}
+			}
+
+			if !isWhitelisted {
+				name, _ := p.Name()
+				cmdline, _ := p.Cmdline()
+
+				sm.PublishEvent(ctx, events.EventSuspiciousProcess, "detached_process",
+					fmt.Sprintf("Detached process detected from non-whitelisted user: %s", username),
+					"medium", map[string]interface{}{
+						"pid":      p.Pid,
+						"username": username,
+						"name":     name,
+						"cmdline":  cmdline,
+					})
+
+				sm.LogEvent(zerolog.InfoLevel, "Detached process detected from non-whitelisted user").
+					Int32("pid", p.Pid).
+					Str("username", username).
+					Str("name", name).
+					Str("cmdline", cmdline)
+			}
+		}
+	}
+}
+
+func (sm *SentinelMonitor) monitorSystemdServices(ctx context.Context) {
+	// Check failed services
+	cmdFailed := exec.Command("systemctl", "list-units", "--failed", "--no-legend")
+	outputFailed, err := cmdFailed.Output()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to run 'systemctl list-units --failed'").Err(err)
+	} else {
+		failedServices := strings.Split(strings.TrimSpace(string(outputFailed)), "\n")
+		if len(failedServices) > 0 && failedServices[0] != "" {
+			sm.PublishEvent(ctx, events.EventSystemAnomaly, "failed_systemd_services",
+				fmt.Sprintf("Failed systemd services detected (%d services)", len(failedServices)),
+				"medium", map[string]interface{}{
+					"failed_services": failedServices,
+					"count":           len(failedServices),
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "Failed systemd services detected").
+				Int("count", len(failedServices))
+			for _, service := range failedServices {
+				sm.LogEvent(zerolog.WarnLevel, "Systemd service failed").
+					Str("service", service)
+			}
+		}
+	}
+
+	// Check masked services (excluding systemd internal ones)
+	cmdMasked := exec.Command("systemctl", "list-unit-files", "--state=masked", "--no-legend")
+	outputMasked, err := cmdMasked.Output()
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to run 'systemctl list-unit-files --state=masked'").Err(err)
+	} else {
+		maskedServices := []string{}
+		for _, line := range strings.Split(strings.TrimSpace(string(outputMasked)), "\n") {
+			if !strings.Contains(line, "systemd-") && strings.TrimSpace(line) != "" {
+				maskedServices = append(maskedServices, line)
+			}
+		}
+		if len(maskedServices) > 0 {
+			sm.LogEvent(zerolog.InfoLevel, "Masked systemd services found").
+				Int("count", len(maskedServices))
+			for _, service := range maskedServices {
+				sm.LogEvent(zerolog.InfoLevel, "Systemd service masked").
+					Str("service", service)
+			}
+		}
+	}
+}
+
+// Persistence monitoring implementations
+func (sm *SentinelMonitor) scanCron(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Scanning for cron-based persistence...")
+
+	// System-wide crontab
+	sm.checkFileContent(ctx, "/etc/crontab", "System crontab entry")
+
+	// Cron directories
+	cronDirs := []string{
+		"/etc/cron.d",
+		"/etc/cron.hourly",
+		"/etc/cron.daily",
+		"/etc/cron.weekly",
+		"/etc/cron.monthly",
+	}
+	for _, dir := range cronDirs {
+		files, err := ioutil.ReadDir(dir)
+		if err != nil {
+			sm.LogEvent(zerolog.DebugLevel, "Could not read cron directory").
+				Err(err).Str("dir", dir)
+			continue
+		}
+		for _, file := range files {
+			if !file.IsDir() {
+				sm.checkFileContent(ctx, filepath.Join(dir, file.Name()), "Cron file entry")
+			}
+		}
+	}
+
+	sm.LogEvent(zerolog.WarnLevel, "Note: User crontab scanning requires elevated privileges and is not fully implemented")
+}
+
+func (sm *SentinelMonitor) checkFileContent(ctx context.Context, filePath, logPrefix string) {
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		sm.LogEvent(zerolog.DebugLevel, "Could not read file").
+			Err(err).Str("file", filePath)
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine != "" && !strings.HasPrefix(trimmedLine, "#") {
+			sm.PublishEvent(ctx, events.EventPersistenceDetected, "cron_entry",
+				fmt.Sprintf("%s: %s", logPrefix, trimmedLine),
+				"info", map[string]interface{}{
+					"file":    filePath,
+					"content": trimmedLine,
+				})
+
+			sm.LogEvent(zerolog.InfoLevel, logPrefix).
+				Str("file", filePath).
+				Str("content", trimmedLine)
+		}
+	}
+}
+
+func (sm *SentinelMonitor) scanSystemd(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Scanning for systemd-based persistence...")
+
+	// User-level services and timers
+	userHomeDir, err := os.UserHomeDir()
+	if err == nil {
+		userSystemdDirs := []string{
+			filepath.Join(userHomeDir, ".config", "systemd", "user"),
+		}
+		for _, dir := range userSystemdDirs {
+			filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil
+				}
+				if !info.IsDir() && (strings.HasSuffix(info.Name(), ".service") || strings.HasSuffix(info.Name(), ".timer")) {
+					sm.PublishEvent(ctx, events.EventPersistenceDetected, "user_systemd_file",
+						fmt.Sprintf("User systemd file found: %s", path),
+						"medium", map[string]interface{}{
+							"file": path,
+							"type": "user_systemd",
+						})
+
+					sm.LogEvent(zerolog.WarnLevel, "User systemd file found").
+						Str("file", path)
+				}
+				return nil
+			})
+		}
+	}
+
+	// System-wide services and timers
+	systemSystemdDir := "/etc/systemd/system"
+	filepath.Walk(systemSystemdDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && (strings.HasSuffix(info.Name(), ".service") || strings.HasSuffix(info.Name(), ".timer")) {
+			// Check if the file is not owned by any package
+			cmd := exec.Command("dpkg", "-S", path)
+			_, err := cmd.Output()
+			if err != nil { // dpkg -S returns non-zero if file is not owned by a package
+				sm.PublishEvent(ctx, events.EventPersistenceDetected, "unpackaged_systemd_file",
+					fmt.Sprintf("Systemd file not owned by any package: %s", path),
+					"high", map[string]interface{}{
+						"file": path,
+						"type": "system_systemd_unpackaged",
+					})
+
+				sm.LogEvent(zerolog.WarnLevel, "Systemd file not owned by any package").
+					Str("file", path)
+			}
+		}
+		return nil
+	})
+}
+
+func (sm *SentinelMonitor) scanShellProfiles(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Scanning shell profiles for persistence...")
+
+	shellProfiles := []string{
+		"/etc/profile",
+		"/etc/bash.bashrc",
+		"/etc/zsh/zshrc",
+	}
+
+	// Add user-specific profiles
+	userHomeDir, err := os.UserHomeDir()
+	if err == nil {
+		shellProfiles = append(shellProfiles,
+			filepath.Join(userHomeDir, ".bashrc"),
+			filepath.Join(userHomeDir, ".zshrc"),
+			filepath.Join(userHomeDir, ".profile"))
+	}
+
+	suspiciousPatterns := []string{
+		"nc", "netcat", "ncat", "socat", "python -c", "perl -e", "bash -c",
+		"wget", "curl", "base64", "eval", "exec",
+	}
+
+	for _, profile := range shellProfiles {
+		content, err := ioutil.ReadFile(profile)
+		if err != nil {
+			sm.LogEvent(zerolog.DebugLevel, "Could not read shell profile").
+				Err(err).Str("file", profile)
+			continue
+		}
+
+		for _, pattern := range suspiciousPatterns {
+			if matched, _ := regexp.MatchString(pattern, string(content)); matched {
+				sm.PublishEvent(ctx, events.EventPersistenceDetected, "suspicious_shell_profile",
+					fmt.Sprintf("Suspicious entry in shell profile: %s (pattern: %s)", profile, pattern),
+					"high", map[string]interface{}{
+						"file":    profile,
+						"pattern": pattern,
+					})
+
+				sm.LogEvent(zerolog.WarnLevel, "Suspicious entry in shell profile").
+					Str("file", profile).Str("pattern", pattern)
+				break
+			}
+		}
+	}
+}
+
+func (sm *SentinelMonitor) scanLdPreload(ctx context.Context) {
+	sm.LogEvent(zerolog.InfoLevel, "Scanning for LD_PRELOAD persistence...")
+
+	ldPreloadPath := "/etc/ld.so.preload"
+	content, err := os.ReadFile(ldPreloadPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			sm.LogEvent(zerolog.InfoLevel, "LD_PRELOAD file does not exist").
+				Str("file", ldPreloadPath)
+		} else {
+			sm.LogEvent(zerolog.ErrorLevel, "Failed to read LD_PRELOAD file").
+				Err(err).Str("file", ldPreloadPath)
+		}
+		return
+	}
+
+	trimmedContent := strings.TrimSpace(string(content))
+	if trimmedContent != "" {
+		sm.PublishEvent(ctx, events.EventPersistenceDetected, "ld_preload_configured",
+			fmt.Sprintf("LD_PRELOAD is configured: %s", trimmedContent),
+			"high", map[string]interface{}{
+				"file":    ldPreloadPath,
+				"content": trimmedContent,
+			})
+
+		sm.LogEvent(zerolog.WarnLevel, "LD_PRELOAD is configured").
+			Str("file", ldPreloadPath).Str("content", trimmedContent)
+	}
+}
+
+// Reconnaissance detection implementations
+func (sm *SentinelMonitor) detectPortScans(ctx context.Context) {
+	connections, err := psnet.Connections("tcp")
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get TCP connections").Err(err)
+		return
+	}
+
+	synRecvCounts := make(map[string]int)
+	for _, conn := range connections {
+		if conn.Status == "SYN_RECV" {
+			synRecvCounts[conn.Raddr.IP]++
+		}
+	}
+
+	for ip, count := range synRecvCounts {
+		if count > sm.config.PortScanThreshold {
+			sm.PublishEvent(ctx, events.EventSuspiciousNetwork, "port_scan_detected",
+				fmt.Sprintf("Potential port scan detected from %s (%d SYN-RECV connections)", ip, count),
+				"high", map[string]interface{}{
+					"source_ip":      ip,
+					"syn_recv_count": count,
+					"threshold":      sm.config.PortScanThreshold,
+				})
+
+			sm.LogEvent(zerolog.WarnLevel, "Potential port scan detected").
+				Str("source_ip", ip).
+				Int("syn_recv_count", count)
+		}
+	}
+
+	// Update cache for tracking
+	sm.mu.Lock()
+	sm.synRecvCounts = synRecvCounts
+	sm.mu.Unlock()
+}
+
+func (sm *SentinelMonitor) detectSynFloods(ctx context.Context) {
+	connections, err := psnet.Connections("tcp")
+	if err != nil {
+		sm.LogEvent(zerolog.ErrorLevel, "Failed to get TCP connections").Err(err)
+		return
+	}
+
+	synRecvCount := 0
+	for _, conn := range connections {
+		if conn.Status == "SYN_RECV" {
+			synRecvCount++
+		}
+	}
+
+	if synRecvCount > sm.config.SynFloodThreshold {
+		sm.PublishEvent(ctx, events.EventSuspiciousNetwork, "syn_flood_detected",
+			fmt.Sprintf("Potential SYN flood attack detected (%d SYN-RECV connections)", synRecvCount),
+			"critical", map[string]interface{}{
+				"syn_recv_count": synRecvCount,
+				"threshold":      sm.config.SynFloodThreshold,
+			})
+
+		sm.LogEvent(zerolog.WarnLevel, "Potential SYN flood attack detected").
+			Int("syn_recv_count", synRecvCount)
+	}
+}
+
+// Helper functions for Network IDS
+func (sm *SentinelMonitor) isValidInterfaceName(name string) bool {
+	// Interface names typically consist of alphanumeric characters, hyphens, and underscores.
+	// They should not contain spaces or shell metacharacters.
+	return regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(name)
 }

@@ -117,12 +117,16 @@ type FirmwareInfo struct {
 }
 
 type HighValueTarget struct {
-	Path        string    `json:"path"`
-	Type        string    `json:"type"`
-	Criticality string    `json:"criticality"`
-	LastChecked time.Time `json:"last_checked"`
-	Status      string    `json:"status"`
-	Hash        string    `json:"hash,omitempty"`
+	Path            string    `json:"path"`
+	Type            string    `json:"type"`
+	Criticality     string    `json:"criticality"`
+	LastChecked     time.Time `json:"last_checked"`
+	Status          string    `json:"status"`
+	Hash            string    `json:"hash,omitempty"`
+	Size            int64
+	ModTime         time.Time
+	Mode            os.FileMode
+	BaselineModTime *time.Time // Pointer so it can be nil initially
 }
 
 type ThreatLevel string
@@ -909,23 +913,44 @@ func (sm *SentryMonitor) isPathExcluded(path string) bool {
 	return false
 }
 
-// Comprehensive threat assessment
-func (sm *SentryMonitor) assessComprehensiveThreatLevel(ctx context.Context) {
-	var score int
+// Constants for threat scoring
+const (
+	criticalEventWeight        = 4
+	highEventWeight            = 2
+	mediumEventWeight          = 1
+	compromisedTargetWeight    = 3
+	threatLevelRedThreshold    = 20
+	threatLevelOrangeThreshold = 10
+	threatLevelYellowThreshold = 5
+)
 
+// assessComprehensiveThreatLevel orchestrates the threat assessment process.
+func (sm *SentryMonitor) assessComprehensiveThreatLevel(ctx context.Context) {
+	previousLevel := sm.threatLevel
+
+	score, compromisedTargets := sm.calculateThreatScore()
+	sm.threatLevel = sm.determineThreatLevel(score)
+
+	if sm.threatLevel != previousLevel {
+		sm.publishThreatLevelChange(ctx, previousLevel, sm.threatLevel, score, compromisedTargets)
+	}
+
+	sm.UpdateState("comprehensive_threat_level", string(sm.threatLevel))
+	sm.UpdateState("threat_score", score)
+}
+
+// calculateThreatScore computes the overall threat score based on various metrics.
+func (sm *SentryMonitor) calculateThreatScore() (score int, compromisedTargets int) {
 	// Get metrics from event bus
 	if sm.EventBus != nil {
 		metrics := sm.EventBus.GetMetrics()
-
-		// Weight different types of events
-		score += metrics.EventsBySeverity["critical"] * 4
-		score += metrics.EventsBySeverity["high"] * 2
-		score += metrics.EventsBySeverity["medium"] * 1
+		score += metrics.EventsBySeverity["critical"] * criticalEventWeight
+		score += metrics.EventsBySeverity["high"] * highEventWeight
+		score += metrics.EventsBySeverity["medium"] * mediumEventWeight
 	}
 
 	// Additional scoring based on specific threats
 	sm.mu.RLock()
-	compromisedTargets := 0
 	for _, target := range sm.highValueTargets {
 		if target.Status == "compromised" || target.Status == "missing" {
 			compromisedTargets++
@@ -933,35 +958,35 @@ func (sm *SentryMonitor) assessComprehensiveThreatLevel(ctx context.Context) {
 	}
 	sm.mu.RUnlock()
 
-	score += compromisedTargets * 3
+	score += compromisedTargets * compromisedTargetWeight
+	return score, compromisedTargets
+}
 
-	// Determine threat level
-	previousLevel := sm.threatLevel
+// determineThreatLevel maps a threat score to a specific threat level.
+func (sm *SentryMonitor) determineThreatLevel(score int) ThreatLevel {
 	switch {
-	case score >= 20:
-		sm.threatLevel = ThreatLevelRed
-	case score >= 10:
-		sm.threatLevel = ThreatLevelOrange
-	case score >= 5:
-		sm.threatLevel = ThreatLevelYellow
+	case score >= threatLevelRedThreshold:
+		return ThreatLevelRed
+	case score >= threatLevelOrangeThreshold:
+		return ThreatLevelOrange
+	case score >= threatLevelYellowThreshold:
+		return ThreatLevelYellow
 	default:
-		sm.threatLevel = ThreatLevelGreen
+		return ThreatLevelGreen
 	}
+}
 
-	if sm.threatLevel != previousLevel {
-		sm.PublishEvent(ctx, events.EventThreatDetected, "comprehensive_threat_assessment",
-			fmt.Sprintf("Comprehensive threat level changed from %s to %s (score: %d)",
-				previousLevel, sm.threatLevel, score),
-			string(sm.threatLevel), map[string]interface{}{
-				"previous_level":      string(previousLevel),
-				"new_level":           string(sm.threatLevel),
-				"threat_score":        score,
-				"compromised_targets": compromisedTargets,
-			})
-	}
-
-	sm.UpdateState("comprehensive_threat_level", string(sm.threatLevel))
-	sm.UpdateState("threat_score", score)
+// publishThreatLevelChange sends an event when the threat level has changed.
+func (sm *SentryMonitor) publishThreatLevelChange(ctx context.Context, previous, current ThreatLevel, score, compromisedTargets int) {
+	sm.PublishEvent(ctx, events.EventThreatDetected, "comprehensive_threat_assessment",
+		fmt.Sprintf("Comprehensive threat level changed from %s to %s (score: %d)",
+			previous, current, score),
+		string(current), map[string]interface{}{
+			"previous_level":      string(previous),
+			"new_level":           string(current),
+			"threat_score":        score,
+			"compromised_targets": compromisedTargets,
+		})
 }
 
 // Comprehensive metrics update
@@ -1340,25 +1365,71 @@ func (sm *SentryMonitor) monitorFile(ctx context.Context, target *HighValueTarge
 	if err != nil {
 		if os.IsNotExist(err) {
 			sm.handleFileNotFound(ctx, target)
+		} else {
+			// Log other stat errors (permission denied, etc.)
+			sm.LogEvent(zerolog.WarnLevel, "Failed to stat file").
+				Str("path", target.Path).
+				Err(err)
 		}
 		return
 	}
 
+	// Update file information
+	target.Size = info.Size()
+	target.ModTime = info.ModTime()
+	target.Mode = info.Mode()
+
 	// Integrity check
 	if sm.config.IntegrityCheckMode == "hash" || sm.config.IntegrityCheckMode == "both" {
-		if currentHash, err := sm.calculateFileHash(target.Path); err == nil {
-			if baseline, exists := sm.baseline[target.Path]; exists {
-				if currentHash != baseline {
-					sm.handleIntegrityViolation(ctx, target, baseline, currentHash)
-				}
-			} else {
-				sm.baseline[target.Path] = currentHash
-				target.Hash = currentHash
+		currentHash, err := sm.calculateFileHash(target.Path)
+		if err != nil {
+			sm.LogEvent(zerolog.ErrorLevel, "Failed to calculate file hash").
+				Str("path", target.Path).
+				Err(err)
+			target.Status = "error"
+			return
+		}
+
+		// Thread-safe baseline access
+		sm.mu.RLock()
+		baseline, exists := sm.baseline[target.Path]
+		sm.mu.RUnlock()
+
+		if exists {
+			if currentHash != baseline {
+				sm.handleIntegrityViolation(ctx, target, baseline, currentHash)
+				target.Status = "compromised"
+				return
 			}
+		} else {
+			// Thread-safe baseline update
+			sm.mu.Lock()
+			sm.baseline[target.Path] = currentHash
+			sm.mu.Unlock()
+
+			target.Hash = currentHash
+			sm.LogEvent(zerolog.InfoLevel, "Established baseline hash for file").
+				Str("path", target.Path).
+				Str("hash", currentHash)
+		}
+	}
+
+	// Check for modification time changes if that's also being monitored
+	if sm.config.IntegrityCheckMode == "mtime" || sm.config.IntegrityCheckMode == "both" {
+		if target.BaselineModTime != nil {
+			if !info.ModTime().Equal(*target.BaselineModTime) {
+				sm.handleModTimeViolation(ctx, target, *target.BaselineModTime, info.ModTime())
+				target.Status = "modified"
+				return
+			}
+		} else {
+			// Establish baseline modification time
+			target.BaselineModTime = &info.ModTime()
 		}
 	}
 
 	target.Status = "verified"
+	target.LastChecked = time.Now()
 }
 
 func (sm *SentryMonitor) monitorDirectory(ctx context.Context, target *HighValueTarget) {

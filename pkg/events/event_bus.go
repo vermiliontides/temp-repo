@@ -44,10 +44,12 @@ const (
 	EventComplianceStatus EventType = "compliance_status"
 	EventCorrelation      EventType = "correlation"
 	// pkg/monitors/sentinel.go
-	EventAutomatedResponse EventType = "automated_response"
-	EventCertificateChange EventType = "certificate_change"
-	EventCertificateExpiry EventType = "certificate_expiry"
-	EventSystemReport      EventType = "system_report"
+	EventAutomatedResponse   EventType = "automated_response"
+	EventCertificateChange   EventType = "certificate_change"
+	EventCertificateExpiry   EventType = "certificate_expiry"
+	EventPersistenceDetected EventType = "persistence_detected"
+	EventSuspiciousProcess   EventType = "suspicious_process"
+	EventSystemReport        EventType = "system_report"
 	// /pkg/monitors/sentry.go
 	EventFirmwareChange EventType = "firmware_change"
 )

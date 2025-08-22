@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/lucid-vigil/sentinel/pkg/events"
-	"github.com/lucid-vigil/sentinel/pkg/mointors/scheduler"
 	"github.com/lucid-vigil/sentinel/pkg/monitors/base_monitor"
+	"github.com/lucid-vigil/sentinel/pkg/monitors/scheduler"
 	"github.com/rs/zerolog"
 )
 
@@ -458,10 +458,10 @@ func NewAnalyzerMonitor(logger zerolog.Logger, eventBus *events.EventBus) schedu
 	}
 
 	// Add analyzer capabilities
-	monitor.AddCapability(CapabilityMachineLearning)
-	monitor.AddCapability(CapabilityBehaviorAnalysis)
-	monitor.AddCapability(CapabilityCorrelation)
-	monitor.AddCapability(CapabilityThreatIntel)
+	monitor.AddCapability(base_monitor.CapabilityMachineLearning)
+	monitor.AddCapability(base_monitor.CapabilityBehaviorAnalysis)
+	monitor.AddCapability(base_monitor.CapabilityCorrelation)
+	monitor.AddCapability(base_monitor.CapabilityThreatIntel)
 	monitor.AddCapability("pattern_recognition")
 	monitor.AddCapability("threat_analysis")
 	monitor.AddCapability("containment_planning")

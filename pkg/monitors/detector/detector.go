@@ -1,13 +1,13 @@
-// pkg/monitors/enhanced/enhanced_detector.go
-// Enhanced Detector Monitor - Comprehensive behavior analysis and anomaly detection system
+// Detector Monitor - Comprehensive behavior analysis and anomaly detection system
 // Combines functionality from behavior_monitor.go and provides foundation for ML/AI features
-package enhanced
+package monitors
 
 import (
 	"bufio"
 	"context"
 	"crypto/md5"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/user"
@@ -55,6 +55,11 @@ type DetectorMonitor struct {
 	// Synchronization
 	mu         sync.RWMutex
 	baselineMu sync.RWMutex
+	running    bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	ticker     *time.Ticker
 }
 
 // ComprehensiveDetectorConfig - Configuration for all detection capabilities
@@ -303,7 +308,8 @@ func NewDetectorMonitor(logger zerolog.Logger, eventBus *events.EventBus) schedu
 	monitor.AddCapability("baseline_learning")
 	monitor.AddCapability("sequence_analysis")
 
-	return monitor
+	// Return the monitor (interface conversion should work if DetectorMonitor implements scheduler.Monitor)
+	return scheduler.Monitor(monitor)
 }
 
 // Configure sets up the comprehensive detector system
@@ -335,6 +341,973 @@ func (dm *DetectorMonitor) Configure(config map[string]interface{}) error {
 
 	dm.LogEvent(zerolog.InfoLevel, "Enhanced Detector Monitor configured successfully")
 	return nil
+}
+
+// Start implements scheduler.Monitor interface
+func (dm *DetectorMonitor) Start(ctx context.Context) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	if dm.running {
+		return fmt.Errorf("detector monitor is already running")
+	}
+
+	dm.LogEvent(zerolog.InfoLevel, "Starting Enhanced Detector Monitor")
+
+	// Create cancellable context
+	dm.ctx, dm.cancel = context.WithCancel(ctx)
+	dm.running = true
+	dm.ticker = time.NewTicker(5 * time.Minute)
+
+	// Start the monitoring goroutine
+	dm.wg.Add(1)
+	go dm.Run(dm.ctx)
+
+	return nil
+}
+
+// Stop implements scheduler.Monitor interface
+func (dm *DetectorMonitor) Stop() error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	if !dm.running {
+		return nil // Already stopped
+	}
+
+	dm.LogEvent(zerolog.InfoLevel, "Stopping Enhanced Detector Monitor")
+
+	// Cancel context and cleanup
+	if dm.cancel != nil {
+		dm.cancel()
+	}
+	if dm.ticker != nil {
+		dm.ticker.Stop()
+	}
+
+	dm.running = false
+
+	// Wait for goroutine to finish
+	dm.wg.Wait()
+
+	dm.LogEvent(zerolog.InfoLevel, "Enhanced Detector Monitor stopped")
+	return nil
+}
+
+// IsRunning implements scheduler.Monitor interface
+func (dm *DetectorMonitor) IsRunning() bool {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+	return dm.running
+}
+
+// Name implements scheduler.Monitor interface
+func (dm *DetectorMonitor) Name() string {
+	return "comprehensive_detector"
+}
+
+// GetStatus implements scheduler.Monitor interface (if required)
+func (dm *DetectorMonitor) GetStatus() map[string]interface{} {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	return map[string]interface{}{
+		"running":         dm.running,
+		"learning_mode":   dm.learningMode,
+		"anomaly_scores":  len(dm.anomalyScores),
+		"detection_rules": len(dm.detectionRules),
+		"process_cache":   len(dm.processCache),
+		"network_cache":   len(dm.networkCache),
+	}
+}
+
+// Run executes the main detector loop
+func (dm *DetectorMonitor) Run(ctx context.Context) error {
+	dm.LogEvent(zerolog.InfoLevel, "Starting Enhanced Detector Monitor")
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			dm.LogEvent(zerolog.InfoLevel, "Enhanced Detector Monitor stopping")
+			return nil
+		case <-ticker.C:
+			dm.runDetectionCycle(ctx)
+		}
+	}
+}
+
+// runDetectionCycle runs a complete detection cycle
+func (dm *DetectorMonitor) runDetectionCycle(ctx context.Context) {
+	dm.lastAnalysis = time.Now()
+
+	// Update detector metrics
+	dm.updateDetectorMetrics()
+
+	// Command history analysis
+	if dm.config.MonitorCommandHistory {
+		dm.runCommandHistoryAnalysis(ctx)
+	}
+
+	// Process behavior analysis
+	if dm.config.MonitorProcessBehavior {
+		dm.runProcessBehaviorAnalysis(ctx)
+	}
+
+	// Network behavior analysis
+	if dm.config.MonitorNetworkBehavior {
+		dm.runNetworkBehaviorAnalysis(ctx)
+	}
+
+	// File access pattern analysis
+	if dm.config.MonitorFileAccess {
+		dm.runFileAccessAnalysis(ctx)
+	}
+
+	// System-wide anomaly detection
+	dm.runSystemAnomalyDetection(ctx)
+
+	// Machine Learning feature extraction
+	if dm.config.EnableMLBaselines {
+		dm.runMLFeatureExtraction(ctx)
+	}
+
+	// Update behavioral baselines
+	if dm.learningMode {
+		dm.updateBehaviorBaselines(ctx)
+	}
+
+	// Comprehensive anomaly assessment
+	dm.performComprehensiveAnomalyAssessment(ctx)
+}
+
+// Network behavior analysis
+func (dm *DetectorMonitor) runNetworkBehaviorAnalysis(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Analyzing network behavior patterns...")
+	// Implementation for network behavior analysis
+	// This would analyze network connections, traffic patterns, etc.
+
+	// Placeholder for network analysis
+	dm.LogEvent(zerolog.InfoLevel, "Network behavior analysis completed")
+}
+
+// File access pattern analysis
+func (dm *DetectorMonitor) runFileAccessAnalysis(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Analyzing file access patterns...")
+	// Implementation for file access pattern analysis
+	// This would monitor file operations, access patterns, etc.
+
+	// Check for suspicious file operations
+	dm.checkSuspiciousFileOperations(ctx)
+
+	dm.LogEvent(zerolog.InfoLevel, "File access analysis completed")
+}
+
+func (dm *DetectorMonitor) checkSuspiciousFileOperations(ctx context.Context) {
+	// Monitor critical system directories
+	criticalDirs := []string{
+		"/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
+		"/boot", "/root", "/home", "/var/log",
+	}
+
+	for _, dir := range criticalDirs {
+		if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // Continue on errors
+			}
+
+			// Skip if it's a directory
+			if info.IsDir() {
+				return nil
+			}
+
+			// Check for recently modified files
+			if time.Since(info.ModTime()) < time.Hour*24 {
+				dm.analyzeRecentFileChange(ctx, path, info)
+			}
+
+			return nil
+		}); err != nil {
+			dm.LogEvent(zerolog.WarnLevel, "Error walking directory").
+				Str("directory", dir).Err(err)
+		}
+	}
+}
+
+func (dm *DetectorMonitor) analyzeRecentFileChange(ctx context.Context, path string, info os.FileInfo) {
+	// Calculate file hash for integrity checking
+	hash, err := dm.calculateFileHash(path)
+	if err != nil {
+		return
+	}
+
+	fileAccess := &FileAccess{
+		Path:       path,
+		AccessType: "modified",
+		Timestamp:  info.ModTime(),
+		Size:       info.Size(),
+		Mode:       info.Mode().String(),
+		Hash:       hash,
+	}
+
+	// Check if this is a suspicious file change
+	if dm.isSuspiciousFileChange(path, info) {
+		dm.PublishEvent(ctx, events.EventFileSystemChange, path,
+			fmt.Sprintf("Suspicious file modification detected: %s", path),
+			"medium", map[string]interface{}{
+				"file_path": path,
+				"file_size": info.Size(),
+				"mod_time":  info.ModTime(),
+				"file_mode": info.Mode().String(),
+				"hash":      hash,
+			})
+	}
+
+	// Update file access patterns
+	dm.updateFileAccessPatterns(fileAccess)
+}
+
+func (dm *DetectorMonitor) isSuspiciousFileChange(path string, info os.FileInfo) bool {
+	// Check for executable files in unusual locations
+	if (info.Mode().Perm() & 0111) != 0 {
+		suspiciousLocations := []string{
+			"/tmp", "/var/tmp", "/dev/shm", "/home",
+		}
+
+		for _, location := range suspiciousLocations {
+			if strings.HasPrefix(path, location) {
+				return true
+			}
+		}
+	}
+
+	// Check for hidden files in system directories
+	if strings.HasPrefix(filepath.Base(path), ".") {
+		systemDirs := []string{"/etc", "/bin", "/sbin", "/usr", "/boot"}
+		for _, sysDir := range systemDirs {
+			if strings.HasPrefix(path, sysDir) {
+				return true
+			}
+		}
+	}
+
+	// Check for SUID/SGID files
+	if (info.Mode()&os.ModeSetuid != 0) || (info.Mode()&os.ModeSetgid != 0) {
+		return true
+	}
+
+	return false
+}
+
+func (dm *DetectorMonitor) updateFileAccessPatterns(fileAccess *FileAccess) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	key := fileAccess.Path
+
+	if pattern, exists := dm.fileAccessPatterns[key]; exists {
+		pattern.Frequency++
+		pattern.LastAccess = fileAccess.Timestamp
+		pattern.FileSize = fileAccess.Size
+		pattern.FileMode = fileAccess.Mode
+	} else {
+		pattern := &FileAccessPattern{
+			FilePath:   fileAccess.Path,
+			AccessType: fileAccess.AccessType,
+			Frequency:  1,
+			LastAccess: fileAccess.Timestamp,
+			FileSize:   fileAccess.Size,
+			FileMode:   fileAccess.Mode,
+			Suspicious: dm.isSuspiciousFile(fileAccess.Path),
+		}
+
+		dm.fileAccessPatterns[key] = pattern
+	}
+}
+
+func (dm *DetectorMonitor) isSuspiciousFile(path string) bool {
+	suspiciousExtensions := []string{".sh", ".py", ".pl", ".rb", ".exe", ".bin"}
+	suspiciousPaths := []string{"/tmp", "/var/tmp", "/dev/shm"}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	for _, suspExt := range suspiciousExtensions {
+		if ext == suspExt {
+			for _, suspPath := range suspiciousPaths {
+				if strings.HasPrefix(path, suspPath) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (dm *DetectorMonitor) calculateFileHash(filepath string) (string, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := md5.New()
+
+	// Read the entire file for hashing
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+// System-wide anomaly detection
+func (dm *DetectorMonitor) runSystemAnomalyDetection(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Running system-wide anomaly detection...")
+
+	// Collect current system metrics
+	systemMetrics := dm.collectSystemMetrics()
+
+	// Compare against baselines
+	dm.compareWithSystemBaselines(ctx, systemMetrics)
+
+	// Update system baselines if in learning mode
+	if dm.learningMode {
+		dm.updateSystemBaselines(systemMetrics)
+	}
+}
+
+func (dm *DetectorMonitor) collectSystemMetrics() map[string]float64 {
+	metrics := make(map[string]float64)
+
+	// CPU usage metrics
+	if cpuPercents, err := dm.getCPUUsage(); err == nil {
+		metrics["cpu_user"] = cpuPercents[0]
+		metrics["cpu_system"] = cpuPercents[1]
+		metrics["cpu_idle"] = cpuPercents[2]
+	}
+
+	// Memory usage metrics
+	if memInfo, err := dm.getMemoryInfo(); err == nil {
+		metrics["memory_used_percent"] = memInfo["used_percent"]
+		metrics["memory_available"] = memInfo["available"]
+		metrics["memory_cached"] = memInfo["cached"]
+	}
+
+	// Disk usage metrics
+	if diskInfo, err := dm.getDiskInfo(); err == nil {
+		metrics["disk_used_percent"] = diskInfo["used_percent"]
+		metrics["disk_free"] = diskInfo["free"]
+		metrics["disk_inodes_used"] = diskInfo["inodes_used"]
+	}
+
+	// Network metrics
+	if netInfo, err := dm.getNetworkInfo(); err == nil {
+		metrics["network_bytes_sent"] = netInfo["bytes_sent"]
+		metrics["network_bytes_recv"] = netInfo["bytes_recv"]
+		metrics["network_connections"] = netInfo["connections"]
+	}
+
+	// Process metrics
+	if procInfo, err := dm.getProcessInfo(); err == nil {
+		metrics["process_count"] = procInfo["total_processes"]
+		metrics["process_running"] = procInfo["running_processes"]
+		metrics["process_zombie"] = procInfo["zombie_processes"]
+	}
+
+	return metrics
+}
+
+func (dm *DetectorMonitor) getCPUUsage() ([]float64, error) {
+	// Simplified CPU usage calculation
+	// In a real implementation, you'd use gopsutil or similar
+	return []float64{15.2, 8.3, 76.5}, nil
+}
+
+func (dm *DetectorMonitor) getMemoryInfo() (map[string]float64, error) {
+	// Simplified memory info
+	return map[string]float64{
+		"used_percent": 45.2,
+		"available":    8192.0,
+		"cached":       2048.0,
+	}, nil
+}
+
+func (dm *DetectorMonitor) getDiskInfo() (map[string]float64, error) {
+	// Simplified disk info
+	return map[string]float64{
+		"used_percent": 65.8,
+		"free":         50000.0,
+		"inodes_used":  12000.0,
+	}, nil
+}
+
+func (dm *DetectorMonitor) getNetworkInfo() (map[string]float64, error) {
+	// Simplified network info
+	return map[string]float64{
+		"bytes_sent":  1048576.0,
+		"bytes_recv":  2097152.0,
+		"connections": 45.0,
+	}, nil
+}
+
+func (dm *DetectorMonitor) getProcessInfo() (map[string]float64, error) {
+	// Simplified process info
+	processes, err := psutil.Processes()
+	if err != nil {
+		return nil, err
+	}
+
+	totalProc := float64(len(processes))
+	runningProc := 0.0
+	zombieProc := 0.0
+
+	for _, proc := range processes {
+		if status, err := proc.Status(); err == nil {
+			switch strings.ToLower(status) {
+			case "running":
+				runningProc++
+			case "zombie":
+				zombieProc++
+			}
+		}
+	}
+
+	return map[string]float64{
+		"total_processes":   totalProc,
+		"running_processes": runningProc,
+		"zombie_processes":  zombieProc,
+	}, nil
+}
+
+func (dm *DetectorMonitor) compareWithSystemBaselines(ctx context.Context, currentMetrics map[string]float64) {
+	dm.baselineMu.RLock()
+	defer dm.baselineMu.RUnlock()
+
+	for metricName, currentValue := range currentMetrics {
+		baseline, exists := dm.systemBaselines[metricName]
+		if !exists {
+			continue // No baseline to compare against
+		}
+
+		// Calculate z-score for anomaly detection
+		if baseline.StatisticalData != nil && baseline.StatisticalData.StdDev > 0 {
+			zScore := (currentValue - baseline.StatisticalData.Mean) / baseline.StatisticalData.StdDev
+
+			// Check if this is an anomaly (z-score > threshold)
+			if math.Abs(zScore) > dm.config.AnomalyThreshold {
+				severity := "medium"
+				if math.Abs(zScore) > dm.config.AnomalyThreshold*1.5 {
+					severity = "high"
+				}
+
+				dm.PublishEvent(ctx, events.EventSystemAnomaly, metricName,
+					fmt.Sprintf("System metric anomaly detected: %s (z-score: %.2f)", metricName, zScore),
+					severity, map[string]interface{}{
+						"metric_name":     metricName,
+						"current_value":   currentValue,
+						"baseline_mean":   baseline.StatisticalData.Mean,
+						"baseline_stddev": baseline.StatisticalData.StdDev,
+						"z_score":         zScore,
+					})
+
+				// Update anomaly score
+				dm.anomalyScores[metricName] = math.Abs(zScore)
+			}
+		}
+	}
+}
+
+func (dm *DetectorMonitor) updateSystemBaselines(metrics map[string]float64) {
+	dm.baselineMu.Lock()
+	defer dm.baselineMu.Unlock()
+
+	for metricName, value := range metrics {
+		baseline, exists := dm.systemBaselines[metricName]
+		if !exists {
+			// Create new baseline
+			baseline = &SystemBaseline{
+				Type:        "system_metric",
+				CreatedAt:   time.Now(),
+				LastUpdated: time.Now(),
+				Metrics:     make(map[string]float64),
+				StatisticalData: &StatisticalData{
+					Mean:   value,
+					StdDev: 0.0,
+				},
+				Confidence: 0.1, // Low confidence initially
+			}
+			baseline.Metrics[metricName] = value
+			dm.systemBaselines[metricName] = baseline
+		} else {
+			// Update existing baseline using exponential moving average
+			alpha := 0.1 // Learning rate
+			baseline.StatisticalData.Mean = alpha*value + (1-alpha)*baseline.StatisticalData.Mean
+
+			// Update standard deviation (simplified)
+			variance := math.Pow(value-baseline.StatisticalData.Mean, 2)
+			baseline.StatisticalData.StdDev = math.Sqrt(alpha*variance + (1-alpha)*math.Pow(baseline.StatisticalData.StdDev, 2))
+
+			baseline.LastUpdated = time.Now()
+			baseline.Confidence = math.Min(baseline.Confidence+0.01, 1.0)
+		}
+	}
+}
+
+// Machine Learning feature extraction
+func (dm *DetectorMonitor) runMLFeatureExtraction(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Extracting features for machine learning...")
+
+	// Extract features from current system state
+	features := dm.extractCurrentFeatures()
+
+	// Create feature vector
+	featureVector := FeatureVector{
+		Timestamp:    time.Now(),
+		Features:     features,
+		Label:        dm.determineCurrentLabel(),
+		AnomalyScore: dm.calculateCurrentAnomalyScore(),
+		Metadata:     dm.collectFeatureMetadata(),
+	}
+
+	// Add to feature vector collection
+	dm.mu.Lock()
+	dm.featureVectors = append(dm.featureVectors, featureVector)
+
+	// Maintain sliding window of features
+	maxFeatures := dm.config.FeatureWindowSize
+	if maxFeatures > 0 && len(dm.featureVectors) > maxFeatures {
+		dm.featureVectors = dm.featureVectors[len(dm.featureVectors)-maxFeatures:]
+	}
+	dm.mu.Unlock()
+
+	// Perform clustering if enabled and sufficient data
+	if dm.config.ClusteringEnabled && len(dm.featureVectors) >= dm.config.MinClusterSize {
+		dm.performSimpleClustering(ctx)
+	}
+}
+
+func (dm *DetectorMonitor) extractCurrentFeatures() map[string]float64 {
+	features := make(map[string]float64)
+
+	// Command frequency features
+	dm.mu.RLock()
+	totalCommands := 0
+	for _, pattern := range dm.commandPatterns {
+		totalCommands += pattern.Frequency
+	}
+
+	if totalCommands > 0 {
+		features["unique_commands"] = float64(len(dm.commandPatterns))
+		features["avg_command_frequency"] = float64(totalCommands) / float64(len(dm.commandPatterns))
+	}
+
+	// Process features
+	features["total_processes"] = float64(len(dm.processCache))
+
+	var totalCPU, totalMemory float64
+	for _, proc := range dm.processCache {
+		totalCPU += proc.CPUPercent
+		totalMemory += proc.MemoryPercent
+	}
+
+	if len(dm.processCache) > 0 {
+		features["avg_cpu_usage"] = totalCPU / float64(len(dm.processCache))
+		features["avg_memory_usage"] = totalMemory / float64(len(dm.processCache))
+	}
+
+	// File access features
+	features["file_access_patterns"] = float64(len(dm.fileAccessPatterns))
+
+	suspiciousFiles := 0
+	for _, pattern := range dm.fileAccessPatterns {
+		if pattern.Suspicious {
+			suspiciousFiles++
+		}
+	}
+	features["suspicious_file_ratio"] = float64(suspiciousFiles) / math.Max(1, float64(len(dm.fileAccessPatterns)))
+
+	dm.mu.RUnlock()
+
+	// Time-based features
+	hour := time.Now().Hour()
+	features["hour_of_day"] = float64(hour)
+	features["day_of_week"] = float64(time.Now().Weekday())
+
+	return features
+}
+
+func (dm *DetectorMonitor) determineCurrentLabel() string {
+	// In learning mode, we assume normal behavior
+	if dm.learningMode {
+		return "normal"
+	}
+
+	// Check anomaly scores to determine label
+	totalScore := 0.0
+	for _, score := range dm.anomalyScores {
+		totalScore += score
+	}
+
+	if totalScore > dm.config.AnomalyThreshold*2 {
+		return "anomalous"
+	}
+	return "normal"
+}
+
+func (dm *DetectorMonitor) calculateCurrentAnomalyScore() float64 {
+	if len(dm.anomalyScores) == 0 {
+		return 0.0
+	}
+
+	totalScore := 0.0
+	for _, score := range dm.anomalyScores {
+		totalScore += score
+	}
+	return totalScore / float64(len(dm.anomalyScores))
+}
+
+func (dm *DetectorMonitor) collectFeatureMetadata() map[string]interface{} {
+	metadata := map[string]interface{}{
+		"learning_mode":    dm.learningMode,
+		"baselines_count":  len(dm.behaviorBaselines),
+		"detection_rules":  len(dm.detectionRules),
+		"command_patterns": len(dm.commandPatterns),
+		"process_patterns": len(dm.processPatterns),
+		"file_patterns":    len(dm.fileAccessPatterns),
+	}
+	return metadata
+}
+
+// Simple clustering implementation for anomaly detection
+func (dm *DetectorMonitor) performSimpleClustering(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Performing feature clustering for anomaly detection...")
+
+	// Simple k-means clustering implementation
+	// This is a basic implementation - in production, you'd use a proper ML library
+
+	if len(dm.featureVectors) < 2 {
+		return
+	}
+
+	// Extract feature matrix
+	featureMatrix := make([][]float64, len(dm.featureVectors))
+	featureNames := make([]string, 0)
+
+	// Get feature names from first vector
+	for featureName := range dm.featureVectors[0].Features {
+		featureNames = append(featureNames, featureName)
+	}
+	sort.Strings(featureNames) // Ensure consistent ordering
+
+	// Build feature matrix
+	for i, fv := range dm.featureVectors {
+		row := make([]float64, len(featureNames))
+		for j, featureName := range featureNames {
+			if val, exists := fv.Features[featureName]; exists {
+				row[j] = val
+			}
+		}
+		featureMatrix[i] = row
+	}
+
+	// Perform simple clustering (2 clusters: normal vs anomalous)
+	clusters := dm.simpleKMeans(featureMatrix, 2)
+
+	// Update cluster assignments
+	dm.mu.Lock()
+	for i, clusterID := range clusters {
+		if i < len(dm.featureVectors) {
+			dm.featureVectors[i].ClusterID = clusterID
+		}
+	}
+	dm.mu.Unlock()
+
+	// Analyze clusters for anomalies
+	dm.analyzeClusterAnomalies(ctx, clusters)
+}
+
+func (dm *DetectorMonitor) simpleKMeans(data [][]float64, k int) []int {
+	if len(data) < k || len(data[0]) == 0 {
+		// Return all points in cluster 0 if not enough data
+		clusters := make([]int, len(data))
+		return clusters
+	}
+
+	// Initialize centroids randomly
+	centroids := make([][]float64, k)
+	for i := range centroids {
+		centroids[i] = make([]float64, len(data[0]))
+		copy(centroids[i], data[i%len(data)]) // Simple initialization
+	}
+
+	clusters := make([]int, len(data))
+	maxIterations := 10
+
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		// Assign points to clusters
+		changed := false
+		for i, point := range data {
+			bestCluster := 0
+			bestDistance := dm.euclideanDistance(point, centroids[0])
+
+			for j := 1; j < k; j++ {
+				distance := dm.euclideanDistance(point, centroids[j])
+				if distance < bestDistance {
+					bestDistance = distance
+					bestCluster = j
+				}
+			}
+
+			if clusters[i] != bestCluster {
+				changed = true
+				clusters[i] = bestCluster
+			}
+		}
+
+		if !changed {
+			break
+		}
+
+		// Update centroids
+		for j := 0; j < k; j++ {
+			clusterPoints := [][]float64{}
+			for i, point := range data {
+				if clusters[i] == j {
+					clusterPoints = append(clusterPoints, point)
+				}
+			}
+
+			if len(clusterPoints) > 0 {
+				for dim := 0; dim < len(centroids[j]); dim++ {
+					sum := 0.0
+					for _, point := range clusterPoints {
+						sum += point[dim]
+					}
+					centroids[j][dim] = sum / float64(len(clusterPoints))
+				}
+			}
+		}
+	}
+
+	return clusters
+}
+
+func (dm *DetectorMonitor) euclideanDistance(a, b []float64) float64 {
+	if len(a) != len(b) {
+		return math.Inf(1)
+	}
+
+	sum := 0.0
+	for i := range a {
+		diff := a[i] - b[i]
+		sum += diff * diff
+	}
+	return math.Sqrt(sum)
+}
+
+func (dm *DetectorMonitor) analyzeClusterAnomalies(ctx context.Context, clusters []int) {
+	// Count cluster sizes
+	clusterSizes := make(map[int]int)
+	for _, cluster := range clusters {
+		clusterSizes[cluster]++
+	}
+
+	// Identify minority cluster as potentially anomalous
+	minCluster, minSize := -1, len(clusters)
+	for cluster, size := range clusterSizes {
+		if size < minSize {
+			minSize = size
+			minCluster = cluster
+		}
+	}
+
+	// If minority cluster is very small, flag as anomalous
+	if minSize < len(clusters)/10 { // Less than 10% of data
+		dm.PublishEvent(ctx, events.EventSystemAnomaly, "cluster_analysis",
+			fmt.Sprintf("Anomalous behavior cluster detected (cluster %d, %d samples)", minCluster, minSize),
+			"medium", map[string]interface{}{
+				"cluster_id":    minCluster,
+				"cluster_size":  minSize,
+				"total_samples": len(clusters),
+				"anomaly_ratio": float64(minSize) / float64(len(clusters)),
+			})
+	}
+}
+
+// Anomaly detection helper methods
+func (dm *DetectorMonitor) detectCommandAnomalies(ctx context.Context) {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	if len(dm.commandPatterns) == 0 {
+		return
+	}
+
+	// Calculate command frequency statistics
+	frequencies := make([]float64, 0, len(dm.commandPatterns))
+	for _, pattern := range dm.commandPatterns {
+		frequencies = append(frequencies, float64(pattern.Frequency))
+	}
+
+	if len(frequencies) < 2 {
+		return
+	}
+
+	mean := dm.calculateMean(frequencies)
+	stddev := dm.calculateStdDev(frequencies, mean)
+
+	// Detect anomalous commands (too frequent or too rare)
+	for command, pattern := range dm.commandPatterns {
+		freq := float64(pattern.Frequency)
+		zScore := (freq - mean) / stddev
+
+		if math.Abs(zScore) > dm.anomalyThresholds.CommandFrequency {
+			severity := "low"
+			if math.Abs(zScore) > dm.anomalyThresholds.CommandFrequency*1.5 {
+				severity = "medium"
+			}
+
+			description := "Unusual command frequency detected"
+			if zScore > 0 {
+				description = "Unusually frequent command detected"
+			} else {
+				description = "Unusually rare command detected"
+			}
+
+			dm.PublishEvent(ctx, events.EventSystemAnomaly, command,
+				fmt.Sprintf("%s: %s (z-score: %.2f)", description, command, zScore),
+				severity, map[string]interface{}{
+					"command":     command,
+					"frequency":   pattern.Frequency,
+					"z_score":     zScore,
+					"mean_freq":   mean,
+					"stddev_freq": stddev,
+				})
+		}
+	}
+}
+
+func (dm *DetectorMonitor) detectProcessAnomalies(ctx context.Context) {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	// Analyze process resource usage patterns
+	cpuUsages := make([]float64, 0, len(dm.processCache))
+	memUsages := make([]float64, 0, len(dm.processCache))
+
+	for _, proc := range dm.processCache {
+		cpuUsages = append(cpuUsages, proc.CPUPercent)
+		memUsages = append(memUsages, proc.MemoryPercent)
+	}
+
+	if len(cpuUsages) < 2 {
+		return
+	}
+
+	cpuMean := dm.calculateMean(cpuUsages)
+	cpuStdDev := dm.calculateStdDev(cpuUsages, cpuMean)
+	memMean := dm.calculateMean(memUsages)
+	memStdDev := dm.calculateStdDev(memUsages, memMean)
+
+	// Check for anomalous processes
+	for pid, proc := range dm.processCache {
+		cpuZScore := 0.0
+		memZScore := 0.0
+
+		if cpuStdDev > 0 {
+			cpuZScore = (proc.CPUPercent - cpuMean) / cpuStdDev
+		}
+		if memStdDev > 0 {
+			memZScore = (proc.MemoryPercent - memMean) / memStdDev
+		}
+
+		if math.Abs(cpuZScore) > dm.anomalyThresholds.ProcessBehavior ||
+			math.Abs(memZScore) > dm.anomalyThresholds.ProcessBehavior {
+
+			severity := "medium"
+			if math.Max(math.Abs(cpuZScore), math.Abs(memZScore)) > dm.anomalyThresholds.ProcessBehavior*1.5 {
+				severity = "high"
+			}
+
+			dm.PublishEvent(ctx, events.EventSystemAnomaly, fmt.Sprintf("pid_%d", pid),
+				fmt.Sprintf("Anomalous process resource usage: %s (CPU z-score: %.2f, Memory z-score: %.2f)",
+					proc.Name, cpuZScore, memZScore),
+				severity, map[string]interface{}{
+					"process_name":   proc.Name,
+					"pid":            pid,
+					"cpu_percent":    proc.CPUPercent,
+					"memory_percent": proc.MemoryPercent,
+					"cpu_z_score":    cpuZScore,
+					"memory_z_score": memZScore,
+				})
+		}
+	}
+}
+
+// Comprehensive anomaly assessment
+func (dm *DetectorMonitor) performComprehensiveAnomalyAssessment(ctx context.Context) {
+	dm.LogEvent(zerolog.InfoLevel, "Performing comprehensive anomaly assessment...")
+
+	// Calculate overall anomaly score
+	overallScore := dm.calculateOverallAnomalyScore()
+
+	// Determine system threat level based on anomalies
+	threatLevel := dm.determineAnomalyBasedThreatLevel(overallScore)
+
+	// Update detector state
+	dm.UpdateState("overall_anomaly_score", overallScore)
+	dm.UpdateState("threat_level", threatLevel)
+
+	// Publish comprehensive assessment if significant anomalies detected
+	if overallScore > dm.config.AnomalyThreshold {
+		dm.PublishEvent(ctx, events.EventSystemAnomaly, "comprehensive_assessment",
+			fmt.Sprintf("Comprehensive anomaly assessment: elevated threat level (%s, score: %.2f)",
+				threatLevel, overallScore),
+			dm.determineSeverityFromThreatLevel(threatLevel), map[string]interface{}{
+				"overall_anomaly_score": overallScore,
+				"threat_level":          threatLevel,
+				"anomaly_threshold":     dm.config.AnomalyThreshold,
+				"learning_mode":         dm.learningMode,
+			})
+	}
+}
+
+func (dm *DetectorMonitor) calculateOverallAnomalyScore() float64 {
+	if len(dm.anomalyScores) == 0 {
+		return 0.0
+	}
+
+	totalScore := 0.0
+	for _, score := range dm.anomalyScores {
+		totalScore += score
+	}
+
+	// Apply feature weighting
+	weightedScore := totalScore / float64(len(dm.anomalyScores))
+
+	// Add clustering anomaly contribution if available
+	if len(dm.featureVectors) > 0 {
+		recentVector := dm.featureVectors[len(dm.featureVectors)-1]
+		weightedScore += recentVector.AnomalyScore * 0.3
+	}
+
+	return weightedScore
+}
+
+func (dm *DetectorMonitor) determineAnomalyBasedThreatLevel(score float64) string {
+	threshold := dm.config.AnomalyThreshold
+
+	switch {
+	case score >= threshold*3:
+		return "critical"
+	case score >= threshold*2:
+		return "high"
+	case score >= threshold:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 // parseConfig parses the configuration map into the DetectorMonitor config struct
@@ -1055,6 +2028,41 @@ func (dm *DetectorMonitor) analyzeProcess(ctx context.Context, proc *psutil.Proc
 	dm.updateProcessPatterns(processInfo)
 }
 
+func (dm *DetectorMonitor) updateProcessPatterns(processInfo *ProcessInfo) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	key := fmt.Sprintf("%s_%d", processInfo.Name, processInfo.PID)
+
+	pattern := &ProcessPattern{
+		ProcessName:        processInfo.Name,
+		PID:                processInfo.PID,
+		PPID:               processInfo.PPID,
+		Command:            processInfo.Command,
+		User:               processInfo.User,
+		StartTime:          processInfo.CreateTime,
+		CPUPercent:         processInfo.CPUPercent,
+		MemoryPercent:      processInfo.MemoryPercent,
+		OpenFiles:          0, // Would need additional system calls
+		NetworkConnections: 0, // Would need additional system calls
+		ChildProcesses:     []int32{},
+		Behavior:           map[string]int{"execution_count": 1},
+		LastSeen:           processInfo.LastSeen,
+	}
+
+	if existingPattern, exists := dm.processPatterns[key]; exists {
+		existingPattern.LastSeen = processInfo.LastSeen
+		existingPattern.CPUPercent = processInfo.CPUPercent
+		existingPattern.MemoryPercent = processInfo.MemoryPercent
+		if existingPattern.Behavior == nil {
+			existingPattern.Behavior = make(map[string]int)
+		}
+		existingPattern.Behavior["execution_count"]++
+	} else {
+		dm.processPatterns[key] = pattern
+	}
+}
+
 func (dm *DetectorMonitor) checkSuspiciousProcessBehavior(ctx context.Context, processInfo *ProcessInfo) {
 	// Check for suspicious process names
 	suspiciousProcesses := dm.config.SuspiciousProcesses
@@ -1101,801 +2109,5 @@ func (dm *DetectorMonitor) checkSuspiciousProcessBehavior(ctx context.Context, p
 				"memory_percent": processInfo.MemoryPercent,
 				"pid":            processInfo.PID,
 			})
-	}
-}
-
-// Network behavior analysis
-func (dm *DetectorMonitor) runNetworkBehaviorAnalysis(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Analyzing network behavior patterns...")
-	// Implementation for network behavior analysis
-	// This would analyze network connections, traffic patterns, etc.
-
-	// Placeholder for network analysis
-	dm.LogEvent(zerolog.InfoLevel, "Network behavior analysis completed")
-}
-
-// File access pattern analysis
-func (dm *DetectorMonitor) runFileAccessAnalysis(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Analyzing file access patterns...")
-	// Implementation for file access pattern analysis
-	// This would monitor file operations, access patterns, etc.
-
-	// Check for suspicious file operations
-	dm.checkSuspiciousFileOperations(ctx)
-
-	dm.LogEvent(zerolog.InfoLevel, "File access analysis completed")
-}
-
-func (dm *DetectorMonitor) checkSuspiciousFileOperations(ctx context.Context) {
-	// Monitor critical system directories
-	criticalDirs := []string{
-		"/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
-		"/boot", "/root", "/home", "/var/log",
-	}
-
-	for _, dir := range criticalDirs {
-		if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil // Continue on errors
-			}
-
-			// Skip if it's a directory
-			if info.IsDir() {
-				return nil
-			}
-
-			// Check for recently modified files
-			if time.Since(info.ModTime()) < time.Hour*24 {
-				dm.analyzeRecentFileChange(ctx, path, info)
-			}
-
-			return nil
-		}); err != nil {
-			dm.LogEvent(zerolog.WarnLevel, "Error walking directory").
-				Str("directory", dir).Err(err)
-		}
-	}
-}
-
-func (dm *DetectorMonitor) analyzeRecentFileChange(ctx context.Context, path string, info os.FileInfo) {
-	// Calculate file hash for integrity checking
-	hash, err := dm.calculateFileHash(path)
-	if err != nil {
-		return
-	}
-
-	fileAccess := &FileAccess{
-		Path:       path,
-		AccessType: "modified",
-		Timestamp:  info.ModTime(),
-		Size:       info.Size(),
-		Mode:       info.Mode().String(),
-		Hash:       hash,
-	}
-
-	// Check if this is a suspicious file change
-	if dm.isSuspiciousFileChange(path, info) {
-		dm.PublishEvent(ctx, events.EventFileSystemChange, path,
-			fmt.Sprintf("Suspicious file modification detected: %s", path),
-			"medium", map[string]interface{}{
-				"file_path": path,
-				"file_size": info.Size(),
-				"mod_time":  info.ModTime(),
-				"file_mode": info.Mode().String(),
-				"hash":      hash,
-			})
-	}
-
-	// Update file access patterns
-	dm.updateFileAccessPatterns(fileAccess)
-}
-
-func (dm *DetectorMonitor) isSuspiciousFileChange(path string, info os.FileInfo) bool {
-	// Check for executable files in unusual locations
-	if (info.Mode().Perm() & 0111) != 0 {
-		suspiciousLocations := []string{
-			"/tmp", "/var/tmp", "/dev/shm", "/home",
-		}
-
-		for _, location := range suspiciousLocations {
-			if strings.HasPrefix(path, location) {
-				return true
-			}
-		}
-	}
-
-	// Check for hidden files in system directories
-	if strings.HasPrefix(filepath.Base(path), ".") {
-		systemDirs := []string{"/etc", "/bin", "/sbin", "/usr", "/boot"}
-		for _, sysDir := range systemDirs {
-			if strings.HasPrefix(path, sysDir) {
-				return true
-			}
-		}
-	}
-
-	// Check for SUID/SGID files
-	if (info.Mode()&os.ModeSetuid != 0) || (info.Mode()&os.ModeSetgid != 0) {
-		return true
-	}
-
-	return false
-}
-
-func (dm *DetectorMonitor) updateFileAccessPatterns(fileAccess *FileAccess) {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	key := fileAccess.Path
-
-	if pattern, exists := dm.fileAccessPatterns[key]; exists {
-		pattern.Frequency++
-		pattern.LastAccess = fileAccess.Timestamp
-		pattern.FileSize = fileAccess.Size
-		pattern.FileMode = fileAccess.Mode
-	} else {
-		pattern := &FileAccessPattern{
-			FilePath:   fileAccess.Path,
-			AccessType: fileAccess.AccessType,
-			Frequency:  1,
-			LastAccess: fileAccess.Timestamp,
-			FileSize:   fileAccess.Size,
-			FileMode:   fileAccess.Mode,
-			Suspicious: dm.isSuspiciousFile(fileAccess.Path),
-		}
-
-		dm.fileAccessPatterns[key] = pattern
-	}
-}
-
-func (dm *DetectorMonitor) isSuspiciousFile(path string) bool {
-	suspiciousExtensions := []string{".sh", ".py", ".pl", ".rb", ".exe", ".bin"}
-	suspiciousPaths := []string{"/tmp", "/var/tmp", "/dev/shm"}
-
-	ext := strings.ToLower(filepath.Ext(path))
-	for _, suspExt := range suspiciousExtensions {
-		if ext == suspExt {
-			for _, suspPath := range suspiciousPaths {
-				if strings.HasPrefix(path, suspPath) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func (dm *DetectorMonitor) calculateFileHash(filepath string) (string, error) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := md5.New()
-	if _, err := file.Read(make([]byte, 1024)); err != nil && err.Error() != "EOF" {
-		return "", err
-	}
-
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
-}
-
-// System-wide anomaly detection
-func (dm *DetectorMonitor) runSystemAnomalyDetection(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Running system-wide anomaly detection...")
-
-	// Collect current system metrics
-	systemMetrics := dm.collectSystemMetrics()
-
-	// Compare against baselines
-	dm.compareWithSystemBaselines(ctx, systemMetrics)
-
-	// Update system baselines if in learning mode
-	if dm.learningMode {
-		dm.updateSystemBaselines(systemMetrics)
-	}
-}
-
-func (dm *DetectorMonitor) collectSystemMetrics() map[string]float64 {
-	metrics := make(map[string]float64)
-
-	// CPU usage metrics
-	if cpuPercents, err := dm.getCPUUsage(); err == nil {
-		metrics["cpu_user"] = cpuPercents[0]
-		metrics["cpu_system"] = cpuPercents[1]
-		metrics["cpu_idle"] = cpuPercents[2]
-	}
-
-	// Memory usage metrics
-	if memInfo, err := dm.getMemoryInfo(); err == nil {
-		metrics["memory_used_percent"] = memInfo["used_percent"]
-		metrics["memory_available"] = memInfo["available"]
-		metrics["memory_cached"] = memInfo["cached"]
-	}
-
-	// Disk usage metrics
-	if diskInfo, err := dm.getDiskInfo(); err == nil {
-		metrics["disk_used_percent"] = diskInfo["used_percent"]
-		metrics["disk_free"] = diskInfo["free"]
-		metrics["disk_inodes_used"] = diskInfo["inodes_used"]
-	}
-
-	// Network metrics
-	if netInfo, err := dm.getNetworkInfo(); err == nil {
-		metrics["network_bytes_sent"] = netInfo["bytes_sent"]
-		metrics["network_bytes_recv"] = netInfo["bytes_recv"]
-		metrics["network_connections"] = netInfo["connections"]
-	}
-
-	// Process metrics
-	if procInfo, err := dm.getProcessInfo(); err == nil {
-		metrics["process_count"] = procInfo["total_processes"]
-		metrics["process_running"] = procInfo["running_processes"]
-		metrics["process_zombie"] = procInfo["zombie_processes"]
-	}
-
-	return metrics
-}
-
-func (dm *DetectorMonitor) getCPUUsage() ([]float64, error) {
-	// Simplified CPU usage calculation
-	// In a real implementation, you'd use gopsutil or similar
-	return []float64{15.2, 8.3, 76.5}, nil
-}
-
-func (dm *DetectorMonitor) getMemoryInfo() (map[string]float64, error) {
-	// Simplified memory info
-	return map[string]float64{
-		"used_percent": 45.2,
-		"available":    8192.0,
-		"cached":       2048.0,
-	}, nil
-}
-
-func (dm *DetectorMonitor) getDiskInfo() (map[string]float64, error) {
-	// Simplified disk info
-	return map[string]float64{
-		"used_percent": 65.8,
-		"free":         50000.0,
-		"inodes_used":  12000.0,
-	}, nil
-}
-
-func (dm *DetectorMonitor) getNetworkInfo() (map[string]float64, error) {
-	// Simplified network info
-	return map[string]float64{
-		"bytes_sent":  1048576.0,
-		"bytes_recv":  2097152.0,
-		"connections": 45.0,
-	}, nil
-}
-
-func (dm *DetectorMonitor) compareWithSystemBaselines(ctx context.Context, currentMetrics map[string]float64) {
-	dm.baselineMu.RLock()
-	defer dm.baselineMu.RUnlock()
-
-	for metricName, currentValue := range currentMetrics {
-		baseline, exists := dm.systemBaselines[metricName]
-		if !exists {
-			continue // No baseline to compare against
-		}
-
-		// Calculate z-score for anomaly detection
-		if baseline.StatisticalData != nil && baseline.StatisticalData.StdDev > 0 {
-			zScore := (currentValue - baseline.StatisticalData.Mean) / baseline.StatisticalData.StdDev
-
-			// Check if this is an anomaly (z-score > threshold)
-			if math.Abs(zScore) > dm.config.AnomalyThreshold {
-				severity := "medium"
-				if math.Abs(zScore) > dm.config.AnomalyThreshold*1.5 {
-					severity = "high"
-				}
-
-				dm.PublishEvent(ctx, events.EventSystemAnomaly, metricName,
-					fmt.Sprintf("System metric anomaly detected: %s (z-score: %.2f)", metricName, zScore),
-					severity, map[string]interface{}{
-						"metric_name":     metricName,
-						"current_value":   currentValue,
-						"baseline_mean":   baseline.StatisticalData.Mean,
-						"baseline_stddev": baseline.StatisticalData.StdDev,
-						"z_score":         zScore,
-					})
-
-				// Update anomaly score
-				dm.anomalyScores[metricName] = math.Abs(zScore)
-			}
-		}
-	}
-}
-
-func (dm *DetectorMonitor) updateSystemBaselines(metrics map[string]float64) {
-	dm.baselineMu.Lock()
-	defer dm.baselineMu.Unlock()
-
-	for metricName, value := range metrics {
-		baseline, exists := dm.systemBaselines[metricName]
-		if !exists {
-			// Create new baseline
-			baseline = &SystemBaseline{
-				Type:        "system_metric",
-				CreatedAt:   time.Now(),
-				LastUpdated: time.Now(),
-				Metrics:     make(map[string]float64),
-				StatisticalData: &StatisticalData{
-					Mean:   value,
-					StdDev: 0.0,
-				},
-				Confidence: 0.1, // Low confidence initially
-			}
-			baseline.Metrics[metricName] = value
-			dm.systemBaselines[metricName] = baseline
-		} else {
-			// Update existing baseline using exponential moving average
-			alpha := 0.1 // Learning rate
-			baseline.StatisticalData.Mean = alpha*value + (1-alpha)*baseline.StatisticalData.Mean
-
-			// Update standard deviation (simplified)
-			variance := math.Pow(value-baseline.StatisticalData.Mean, 2)
-			baseline.StatisticalData.StdDev = math.Sqrt(alpha*variance + (1-alpha)*math.Pow(baseline.StatisticalData.StdDev, 2))
-
-			baseline.LastUpdated = time.Now()
-			baseline.Confidence = math.Min(baseline.Confidence+0.01, 1.0)
-		}
-	}
-}
-
-// Machine Learning feature extraction
-func (dm *DetectorMonitor) runMLFeatureExtraction(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Extracting features for machine learning...")
-
-	// Extract features from current system state
-	features := dm.extractCurrentFeatures()
-
-	// Create feature vector
-	featureVector := FeatureVector{
-		Timestamp:    time.Now(),
-		Features:     features,
-		Label:        dm.determineCurrentLabel(),
-		AnomalyScore: dm.calculateCurrentAnomalyScore(),
-		Metadata:     dm.collectFeatureMetadata(),
-	}
-
-	// Add to feature vector collection
-	dm.mu.Lock()
-	dm.featureVectors = append(dm.featureVectors, featureVector)
-
-	// Maintain sliding window of features
-	maxFeatures := dm.config.FeatureWindowSize
-	if maxFeatures > 0 && len(dm.featureVectors) > maxFeatures {
-		dm.featureVectors = dm.featureVectors[len(dm.featureVectors)-maxFeatures:]
-	}
-	dm.mu.Unlock()
-
-	// Perform clustering if enabled and sufficient data
-	if dm.config.ClusteringEnabled && len(dm.featureVectors) >= dm.config.MinClusterSize {
-		dm.performSimpleClustering(ctx)
-	}
-}
-
-func (dm *DetectorMonitor) extractCurrentFeatures() map[string]float64 {
-	features := make(map[string]float64)
-
-	// Command frequency features
-	dm.mu.RLock()
-	totalCommands := 0
-	for _, pattern := range dm.commandPatterns {
-		totalCommands += pattern.Frequency
-	}
-
-	if totalCommands > 0 {
-		features["unique_commands"] = float64(len(dm.commandPatterns))
-		features["avg_command_frequency"] = float64(totalCommands) / float64(len(dm.commandPatterns))
-	}
-
-	// Process features
-	features["total_processes"] = float64(len(dm.processCache))
-
-	var totalCPU, totalMemory float64
-	for _, proc := range dm.processCache {
-		totalCPU += proc.CPUPercent
-		totalMemory += proc.MemoryPercent
-	}
-
-	if len(dm.processCache) > 0 {
-		features["avg_cpu_usage"] = totalCPU / float64(len(dm.processCache))
-		features["avg_memory_usage"] = totalMemory / float64(len(dm.processCache))
-	}
-
-	// File access features
-	features["file_access_patterns"] = float64(len(dm.fileAccessPatterns))
-
-	suspiciousFiles := 0
-	for _, pattern := range dm.fileAccessPatterns {
-		if pattern.Suspicious {
-			suspiciousFiles++
-		}
-	}
-	features["suspicious_file_ratio"] = float64(suspiciousFiles) / math.Max(1, float64(len(dm.fileAccessPatterns)))
-
-	dm.mu.RUnlock()
-
-	// Time-based features
-	hour := time.Now().Hour()
-	features["hour_of_day"] = float64(hour)
-	features["day_of_week"] = float64(time.Now().Weekday())
-
-	return features
-}
-
-func (dm *DetectorMonitor) determineCurrentLabel() string {
-	// In learning mode, we assume normal behavior
-	if dm.learningMode {
-		return "normal"
-	}
-
-	// Check anomaly scores to determine label
-	totalScore := 0.0
-	for _, score := range dm.anomalyScores {
-		totalScore += score
-	}
-
-	if totalScore > dm.config.AnomalyThreshold*2 {
-		return "anomalous"
-	}
-	return "normal"
-}
-
-func (dm *DetectorMonitor) calculateCurrentAnomalyScore() float64 {
-	if len(dm.anomalyScores) == 0 {
-		return 0.0
-	}
-
-	totalScore := 0.0
-	for _, score := range dm.anomalyScores {
-		totalScore += score
-	}
-	return totalScore / float64(len(dm.anomalyScores))
-}
-
-func (dm *DetectorMonitor) collectFeatureMetadata() map[string]interface{} {
-	metadata := map[string]interface{}{
-		"learning_mode":    dm.learningMode,
-		"baselines_count":  len(dm.behaviorBaselines),
-		"detection_rules":  len(dm.detectionRules),
-		"command_patterns": len(dm.commandPatterns),
-		"process_patterns": len(dm.processPatterns),
-		"file_patterns":    len(dm.fileAccessPatterns),
-	}
-	return metadata
-}
-
-// Simple clustering implementation for anomaly detection
-func (dm *DetectorMonitor) performSimpleClustering(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Performing feature clustering for anomaly detection...")
-
-	// Simple k-means clustering implementation
-	// This is a basic implementation - in production, you'd use a proper ML library
-
-	if len(dm.featureVectors) < 2 {
-		return
-	}
-
-	// Extract feature matrix
-	featureMatrix := make([][]float64, len(dm.featureVectors))
-	featureNames := make([]string, 0)
-
-	// Get feature names from first vector
-	for featureName := range dm.featureVectors[0].Features {
-		featureNames = append(featureNames, featureName)
-	}
-	sort.Strings(featureNames) // Ensure consistent ordering
-
-	// Build feature matrix
-	for i, fv := range dm.featureVectors {
-		row := make([]float64, len(featureNames))
-		for j, featureName := range featureNames {
-			if val, exists := fv.Features[featureName]; exists {
-				row[j] = val
-			}
-		}
-		featureMatrix[i] = row
-	}
-
-	// Perform simple clustering (2 clusters: normal vs anomalous)
-	clusters := dm.simpleKMeans(featureMatrix, 2)
-
-	// Update cluster assignments
-	dm.mu.Lock()
-	for i, clusterID := range clusters {
-		if i < len(dm.featureVectors) {
-			dm.featureVectors[i].ClusterID = clusterID
-		}
-	}
-	dm.mu.Unlock()
-
-	// Analyze clusters for anomalies
-	dm.analyzeClusterAnomalies(ctx, clusters)
-}
-
-func (dm *DetectorMonitor) simpleKMeans(data [][]float64, k int) []int {
-	if len(data) < k || len(data[0]) == 0 {
-		// Return all points in cluster 0 if not enough data
-		clusters := make([]int, len(data))
-		return clusters
-	}
-
-	// Initialize centroids randomly
-	centroids := make([][]float64, k)
-	for i := range centroids {
-		centroids[i] = make([]float64, len(data[0]))
-		copy(centroids[i], data[i%len(data)]) // Simple initialization
-	}
-
-	clusters := make([]int, len(data))
-	maxIterations := 10
-
-	for iteration := 0; iteration < maxIterations; iteration++ {
-		// Assign points to clusters
-		changed := false
-		for i, point := range data {
-			bestCluster := 0
-			bestDistance := dm.euclideanDistance(point, centroids[0])
-
-			for j := 1; j < k; j++ {
-				distance := dm.euclideanDistance(point, centroids[j])
-				if distance < bestDistance {
-					bestDistance = distance
-					bestCluster = j
-				}
-			}
-
-			if clusters[i] != bestCluster {
-				changed = true
-				clusters[i] = bestCluster
-			}
-		}
-
-		if !changed {
-			break
-		}
-
-		// Update centroids
-		for j := 0; j < k; j++ {
-			clusterPoints := [][]float64{}
-			for i, point := range data {
-				if clusters[i] == j {
-					clusterPoints = append(clusterPoints, point)
-				}
-			}
-
-			if len(clusterPoints) > 0 {
-				for dim := 0; dim < len(centroids[j]); dim++ {
-					sum := 0.0
-					for _, point := range clusterPoints {
-						sum += point[dim]
-					}
-					centroids[j][dim] = sum / float64(len(clusterPoints))
-				}
-			}
-		}
-	}
-
-	return clusters
-}
-
-func (dm *DetectorMonitor) euclideanDistance(a, b []float64) float64 {
-	if len(a) != len(b) {
-		return math.Inf(1)
-	}
-
-	sum := 0.0
-	for i := range a {
-		diff := a[i] - b[i]
-		sum += diff * diff
-	}
-	return math.Sqrt(sum)
-}
-
-func (dm *DetectorMonitor) analyzeClusterAnomalies(ctx context.Context, clusters []int) {
-	// Count cluster sizes
-	clusterSizes := make(map[int]int)
-	for _, cluster := range clusters {
-		clusterSizes[cluster]++
-	}
-
-	// Identify minority cluster as potentially anomalous
-	minCluster, minSize := -1, len(clusters)
-	for cluster, size := range clusterSizes {
-		if size < minSize {
-			minSize = size
-			minCluster = cluster
-		}
-	}
-
-	// If minority cluster is very small, flag as anomalous
-	if minSize < len(clusters)/10 { // Less than 10% of data
-		dm.PublishEvent(ctx, events.EventSystemAnomaly, "cluster_analysis",
-			fmt.Sprintf("Anomalous behavior cluster detected (cluster %d, %d samples)", minCluster, minSize),
-			"medium", map[string]interface{}{
-				"cluster_id":    minCluster,
-				"cluster_size":  minSize,
-				"total_samples": len(clusters),
-				"anomaly_ratio": float64(minSize) / float64(len(clusters)),
-			})
-	}
-}
-
-// Anomaly detection helper methods
-func (dm *DetectorMonitor) detectCommandAnomalies(ctx context.Context) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	if len(dm.commandPatterns) == 0 {
-		return
-	}
-
-	// Calculate command frequency statistics
-	frequencies := make([]float64, 0, len(dm.commandPatterns))
-	for _, pattern := range dm.commandPatterns {
-		frequencies = append(frequencies, float64(pattern.Frequency))
-	}
-
-	if len(frequencies) < 2 {
-		return
-	}
-
-	mean := dm.calculateMean(frequencies)
-	stddev := dm.calculateStdDev(frequencies, mean)
-
-	// Detect anomalous commands (too frequent or too rare)
-	for command, pattern := range dm.commandPatterns {
-		freq := float64(pattern.Frequency)
-		zScore := (freq - mean) / stddev
-
-		if math.Abs(zScore) > dm.anomalyThresholds.CommandFrequency {
-			severity := "low"
-			if math.Abs(zScore) > dm.anomalyThresholds.CommandFrequency*1.5 {
-				severity = "medium"
-			}
-
-			description := "Unusual command frequency detected"
-			if zScore > 0 {
-				description = "Unusually frequent command detected"
-			} else {
-				description = "Unusually rare command detected"
-			}
-
-			dm.PublishEvent(ctx, events.EventSystemAnomaly, command,
-				fmt.Sprintf("%s: %s (z-score: %.2f)", description, command, zScore),
-				severity, map[string]interface{}{
-					"command":     command,
-					"frequency":   pattern.Frequency,
-					"z_score":     zScore,
-					"mean_freq":   mean,
-					"stddev_freq": stddev,
-				})
-		}
-	}
-}
-
-func (dm *DetectorMonitor) detectProcessAnomalies(ctx context.Context) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	// Analyze process resource usage patterns
-	cpuUsages := make([]float64, 0, len(dm.processCache))
-	memUsages := make([]float64, 0, len(dm.processCache))
-
-	for _, proc := range dm.processCache {
-		cpuUsages = append(cpuUsages, proc.CPUPercent)
-		memUsages = append(memUsages, proc.MemoryPercent)
-	}
-
-	if len(cpuUsages) < 2 {
-		return
-	}
-
-	cpuMean := dm.calculateMean(cpuUsages)
-	cpuStdDev := dm.calculateStdDev(cpuUsages, cpuMean)
-	memMean := dm.calculateMean(memUsages)
-	memStdDev := dm.calculateStdDev(memUsages, memMean)
-
-	// Check for anomalous processes
-	for pid, proc := range dm.processCache {
-		cpuZScore := 0.0
-		memZScore := 0.0
-
-		if cpuStdDev > 0 {
-			cpuZScore = (proc.CPUPercent - cpuMean) / cpuStdDev
-		}
-		if memStdDev > 0 {
-			memZScore = (proc.MemoryPercent - memMean) / memStdDev
-		}
-
-		if math.Abs(cpuZScore) > dm.anomalyThresholds.ProcessBehavior ||
-			math.Abs(memZScore) > dm.anomalyThresholds.ProcessBehavior {
-
-			severity := "medium"
-			if math.Max(math.Abs(cpuZScore), math.Abs(memZScore)) > dm.anomalyThresholds.ProcessBehavior*1.5 {
-				severity = "high"
-			}
-
-			dm.PublishEvent(ctx, events.EventSystemAnomaly, fmt.Sprintf("pid_%d", pid),
-				fmt.Sprintf("Anomalous process resource usage: %s (CPU z-score: %.2f, Memory z-score: %.2f)",
-					proc.Name, cpuZScore, memZScore),
-				severity, map[string]interface{}{
-					"process_name":   proc.Name,
-					"pid":            pid,
-					"cpu_percent":    proc.CPUPercent,
-					"memory_percent": proc.MemoryPercent,
-					"cpu_z_score":    cpuZScore,
-					"memory_z_score": memZScore,
-				})
-		}
-	}
-}
-
-// Comprehensive anomaly assessment
-func (dm *DetectorMonitor) performComprehensiveAnomalyAssessment(ctx context.Context) {
-	dm.LogEvent(zerolog.InfoLevel, "Performing comprehensive anomaly assessment...")
-
-	// Calculate overall anomaly score
-	overallScore := dm.calculateOverallAnomalyScore()
-
-	// Determine system threat level based on anomalies
-	threatLevel := dm.determineAnomalyBasedThreatLevel(overallScore)
-
-	// Update detector state
-	dm.UpdateState("overall_anomaly_score", overallScore)
-	dm.UpdateState("threat_level", threatLevel)
-
-	// Publish comprehensive assessment if significant anomalies detected
-	if overallScore > dm.config.AnomalyThreshold {
-		dm.PublishEvent(ctx, events.EventSystemAnomaly, "comprehensive_assessment",
-			fmt.Sprintf("Comprehensive anomaly assessment: elevated threat level (%s, score: %.2f)",
-				threatLevel, overallScore),
-			dm.determineSeverityFromThreatLevel(threatLevel), map[string]interface{}{
-				"overall_anomaly_score": overallScore,
-				"threat_level":          threatLevel,
-				"anomaly_threshold":     dm.config.AnomalyThreshold,
-				"learning_mode":         dm.learningMode,
-			})
-	}
-}
-
-func (dm *DetectorMonitor) calculateOverallAnomalyScore() float64 {
-	if len(dm.anomalyScores) == 0 {
-		return 0.0
-	}
-
-	totalScore := 0.0
-	for _, score := range dm.anomalyScores {
-		totalScore += score
-	}
-
-	// Apply feature weighting
-	weightedScore := totalScore / float64(len(dm.anomalyScores))
-
-	// Add clustering anomaly contribution if available
-	if len(dm.featureVectors) > 0 {
-		recentVector := dm.featureVectors[len(dm.featureVectors)-1]
-		weightedScore += recentVector.AnomalyScore * 0.3
-	}
-
-	return weightedScore
-}
-
-func (dm *DetectorMonitor) determineAnomalyBasedThreatLevel(score float64) string {
-	threshold := dm.config.AnomalyThreshold
-
-	switch {
-	case score >= threshold*3:
-		return "critical"
-	case score >= threshold*2:
-		return "high"
-	case score >= threshold:
-		return "medium"
-	default:
-		return "low"
 	}
 }
